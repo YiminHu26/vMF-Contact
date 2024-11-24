@@ -18,7 +18,7 @@ import random
 Batch = Tuple[torch.Tensor, torch.Tensor]
 loss_terms_orientation = {
     "baseline": 1,
-    "approach": 1e-1,
+    "approach": 1,
     "grasp_width": 10,
     "graspness": 0.1,
 }
@@ -408,21 +408,23 @@ class vmfContactLightningModule(pl.LightningModule):
                 approach_gt = approach_gt_bt[i][pair_ind[0]]
                 bin_score = bin_scores_bt[i][pair_ind[1]]
 
+                # Regression to the ground-truth approach vector
                 #approach = bin_score[:, :3]
                 #approach = torch.nn.functional.normalize(approach, dim=-1)
+                #approach = gram_schmidt(approach, baseline)
                 #approach_loss = 1 - F.cosine_similarity(approach, approach_gt, dim=-1).mean()
+                
+                # Classification to the ground-truth approach vector
                 bin_num = bin_score.shape[-1]
                 bin_vectors = rotate_circle_to_batch_of_vectors(bin_num, baseline)  # rotate the bin circle to align with the baseline vector
                 # Compute the cosine similarity between each bin vector with the only ground-truth approach vector as ground truth bin score
                 bin_score_gt = torch.sum(bin_vectors * approach_gt.unsqueeze(1), dim=-1)
                 
                 # Compute the l1 loss between the bin score gt and the sigmoid bin score
-                approach_loss = F.l1_loss(bin_score, bin_score_gt, reduction="mean")
+                approach_loss = F.l1_loss(bin_score, bin_score_gt, reduction="mean")                
+                approach = torch.gather(bin_vectors, 1, bin_score.argmax(dim=-1, keepdim=True)[...,None].expand(-1, -1, 3)).squeeze(1)
+                # approach = torch.nn.functional.normalize(approach, dim=-1)
                 self.losses["approach"] = self.losses["approach"] + approach_loss
-
-                approach = (bin_vectors * bin_score.unsqueeze(-1).detach().sigmoid()).sum(1)
-                approach = torch.nn.functional.normalize(approach, dim=-1)
-
                 # Update the AUSC metric
                 if not self.training:
                     self.ausc.update(approach, approach_gt, "approach")
@@ -657,8 +659,7 @@ class vmfContactLightningModule(pl.LightningModule):
             bin_vectors = rotate_circle_to_batch_of_vectors(
                         bin_score.shape[-1], baseline_vec.squeeze(0)
                     )
-            approach = (bin_vectors * bin_score.sigmoid().unsqueeze(-1).detach()).sum(1)
-            approach = torch.nn.functional.normalize(approach, dim=-1)
+            approach = torch.gather(bin_vectors, 1, bin_score.argmax(dim=-1, keepdim=True)[...,None].expand(-1, -1, 3)).squeeze(1)
             predictions["approach"] = approach
 
             grasp_width = predictions["grasp_width"] = out["grasp_width"].squeeze(0)
@@ -720,37 +721,6 @@ class vmfContactLightningModule(pl.LightningModule):
         return pose_chosen.cpu().numpy()
 
 
-def gram_schmidt(vectors):
-    """
-    Perform the Gram-Schmidt process on a set of vectors.
-
-    Args:
-        vectors (torch.Tensor): A tensor of shape (n, d) where n is the number of vectors
-                                and d is the dimension of each vector.
-
-    Returns:
-        torch.Tensor: A tensor of orthogonal vectors with the same shape as the input.
-    """
-    n, d = vectors.shape
-    ortho_vectors = torch.zeros_like(vectors)
-
-    for i in range(n):
-        # Start with the current vector
-        ortho_vectors[i] = vectors[i]
-
-        # Subtract the projection of the current vector onto the previous orthogonal vectors
-        for j in range(i):
-            proj = torch.dot(ortho_vectors[j], vectors[i]) / torch.dot(
-                ortho_vectors[j], ortho_vectors[j]
-            )
-            ortho_vectors[i] -= proj * ortho_vectors[j]
-
-        # Normalize the vector to ensure it has unit length (if needed)
-        ortho_vectors[i] = ortho_vectors[i] / torch.norm(ortho_vectors[i])
-
-    return ortho_vectors
-
-
 def rotate_circle_to_batch_of_vectors(bin_num, target_vectors):
     u_batch = perpendicular_highest_z(target_vectors)
     bin_vectors = generate_bin_vectors(target_vectors, u_batch, bin_num)
@@ -762,11 +732,12 @@ def perpendicular_highest_z(v):
     # Components of the input vector
     vx, vy, vz = v[:, 0], v[:, 1], v[:, 2]
 
-    u_x = -vx * vz
-    u_y = -vy * vz
-    u_z = 1 - torch.pow(vz, 2)
-    u = torch.stack([u_x, u_y, u_z], dim=1)
+    u_x = -vy
+    u_y = vx
+    u = torch.stack([u_x, u_y, vz*0], dim=1)
     u = u / torch.norm(u, dim=1, keepdim=True)
+
+    u = torch.cross(v, u)
     return u
 
 
@@ -971,4 +942,30 @@ def draw_grasps(cp, cp2, approach, bin_vectors=None, score=None, kappa=None,
                 vis_list.append(sphere)
     
     return vis_list
+
+def gram_schmidt(batch_a, batch_b):
+    """
+    Perform 1-to-1 Gram-Schmidt process where batch_a is processed w.r.t batch_b.
+    
+    Args:
+    - batch_a: Tensor of shape (M, 3), the first batch of vectors to process.
+    - batch_b: Tensor of shape (M, 3), the second batch of vectors (reference).
+    
+    Returns:
+    - processed_a: Tensor of shape (M, 3), orthonormalized version of batch_a w.r.t. batch_b.
+    - normalized_b: Tensor of shape (M, 3), normalized version of batch_b.
+    """
+    # Normalize batch_b
+    norm_b = torch.norm(batch_b, dim=1, keepdim=True)
+    normalized_b = batch_b / norm_b
+
+    # Orthogonalize batch_a with respect to normalized_b
+    projection = (torch.sum(batch_a * normalized_b, dim=1, keepdim=True) * normalized_b)
+    orthogonal_a = batch_a - projection
+
+    # Normalize orthogonal_a
+    norm_a = torch.norm(orthogonal_a, dim=1, keepdim=True)
+    processed_a = orthogonal_a / norm_a
+
+    return processed_a
 
