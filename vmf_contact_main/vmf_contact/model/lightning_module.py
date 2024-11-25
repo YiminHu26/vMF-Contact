@@ -622,8 +622,8 @@ class vmfContactLightningModule(pl.LightningModule):
         pcd_num = 20000, 
         sample_num=1,
         grasp_height_th=5e-3,
-        grasp_width_th=0.07,
-        graspness_th=0.1,
+        grasp_width_th=0.1,
+        graspness_th=0.4,
         pcd_from_prompt=None,
         ):
         pcd = torch.tensor(pcd, device=self.device, dtype=torch.float32)
@@ -712,7 +712,7 @@ class vmfContactLightningModule(pl.LightningModule):
 
         sample_num = min(sample_num, poses.size(0))
         # sort poses by graspness
-        # print(torch.sort(kappa, descending=True)) # TODO: change to graspness
+        print(poses) # TODO: change to graspness
         poses_candidates = poses[torch.argsort(kappa, descending=True)][:sample_num] # TODO: change to graspness
 
         #randomly sample 1 poses
@@ -868,8 +868,8 @@ def rotation_from_contact(baseline, approach, translation):
     # First compute y as the cross product of z and x
     y = torch.cross(z_normalized, x_normalized)
 
-    # Define the up direction (positive z-axis)
-    up_direction = torch.tensor([0, 0, 1], dtype=x.dtype, device=x.device)
+    # Define the front direction (positive y-axis)
+    up_direction = torch.tensor([-1, 0, 0], dtype=x.dtype, device=x.device)
 
     # Ensure y is aligned with the up direction
     dot_product = torch.sum(y * up_direction, dim=-1, keepdim=True)  # dot product with up direction
