@@ -1,4 +1,4 @@
-cd vmf_contact_main/openpoints/cpp/chamfer_dist
+cd openpoints/cpp/chamfer_dist
 python setup.py install
 cd ..
 

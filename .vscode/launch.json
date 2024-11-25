@@ -29,7 +29,7 @@
         "--point_backbone", "pointnext-b",
         "--ckpt","epoch=112-step=86558",
         "--devices", "4",
-        "--debug",
+        //"--debug",
 
         //"--eval",
         //"--run-finetuning",

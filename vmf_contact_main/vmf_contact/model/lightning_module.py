@@ -294,7 +294,7 @@ class vmfContactLightningModule(pl.LightningModule):
     def _compute_reconstruction_loss(self, pred, pcds):
         pred_pcd_bt = pred["reconstructed_pcds"]
         self.losses["reconstruction_loss"] = self.reconstruction_loss(pred_pcd_bt, pcds)
-        if self.debug and not self.training:
+        if self.debug:
             for pred_pcd, pcd in zip(pred_pcd_bt, pcds):
                 self._vis_pcd(pred_pcd.view(-1, 3), pcd)
         self.losses["reconstruction_loss"] *= self.reconstruction_loss_coeff / self.batch_size 
@@ -463,7 +463,7 @@ class vmfContactLightningModule(pl.LightningModule):
             
 
             # Visualize the predicted contact points and the baseline vector
-            if self.debug and not self.training:  
+            if self.debug:  
             # if self.losses["baseline"] > 1.8:   
                 filter = torch.randint(0, pred["contact_point"][i][pair_ind[1]].shape[0], (100,), device=pred["contact_point"][i][pair_ind[1]].device)
                 # group_point_pos = pred["group_point_pos"][-1][i]
@@ -498,7 +498,7 @@ class vmfContactLightningModule(pl.LightningModule):
                     cp2_gt=cp2_gt,
                     cp=cp,
                     cp2=cp2,
-                    kappa=kappa_post,
+                    kappa=kappa,
                     approach_gt=approach_gt,
                     approach=approach,
                     #bin_vectors=bin_vectors * bin_score.sigmoid().unsqueeze(-1).detach(),
@@ -511,7 +511,7 @@ class vmfContactLightningModule(pl.LightningModule):
     
     def _vis_pcd(self, pred, gt):
 
-        pred = pred.cpu().numpy() if isinstance(pred, torch.Tensor) else pred
+        pred = pred.detach().cpu().numpy() if isinstance(pred, torch.Tensor) else pred
         gt = gt.cpu().numpy() if isinstance(gt, torch.Tensor) else gt
 
         pcd = o3d.geometry.PointCloud()
@@ -527,14 +527,15 @@ class vmfContactLightningModule(pl.LightningModule):
 
     def _flow_loss(self, pred, groups=20):
         # torch.autograd.set_detect_anomaly(True)
-        features = pred["cp_features"]
-
-            # Compute loss
-        features = features.view(-1, features.shape[-1]).detach()  # .to(self.model.flow_device)
-        loss = self.uncertainty_estimator.forward_kld(features)
+        paired_ind = self.position_assignment_to_gt
+        loss = 0
+        for i in range(self.batch_size):
+            features = pred["cp_features"][i][paired_ind[i][1]]
+            # Compute the flow loss
+            loss += self.uncertainty_estimator.forward_kld(features)
 
         # Make layers Lipschitz continuous
-        self.losses["flow_loss"] = loss * self.flow_loss_coeff
+        self.losses["flow_loss"] = loss / self.batch_size * self.flow_loss_coeff
 
     def vis_grasps(
         self,
