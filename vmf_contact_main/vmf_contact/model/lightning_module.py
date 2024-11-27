@@ -522,7 +522,7 @@ class vmfContactLightningModule(pl.LightningModule):
         pcd_gt.points = o3d.utility.Vector3dVector(gt)
         pcd_gt.paint_uniform_color([0.1, 0.1, 0.7])
 
-        o3d.visualization.draw_geometries([pcd, pcd_gt])
+        o3d.visualization.draw_geometries([pcd])
 
 
     def _flow_loss(self, pred, groups=20):

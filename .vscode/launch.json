@@ -27,9 +27,9 @@
         "--flow_layers", "8",
         
         "--point_backbone", "pointnext-b",
-        "--ckpt","epoch=112-step=86558",
+        "--ckpt","epoch=70-step=54386",
         "--devices", "4",
-        //"--debug",
+        "--debug",
 
         //"--eval",
         //"--run-finetuning",
