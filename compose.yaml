@@ -11,9 +11,9 @@ services:
   app:
     build:
       context: .
-      target: final
     volumes:
       - .:/vmf
+      - /media/HDD2/Yitian_data/data_all:/vmf/data_all
     deploy:
       resources:
         reservations:

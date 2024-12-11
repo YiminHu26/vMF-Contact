@@ -4,3 +4,4 @@ __pycache__
 *.pth
 .venv
 *.ckpt
+data_all

@@ -7,7 +7,7 @@
 ################################################################################
 # Create a base stage for the application.
 # We use the nvidia/cuda image as a base image for this so we can leverage the GPU for our application.
-FROM nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04 as base
+FROM nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
 
 ENV TORCH_CUDA_ARCH_LIST="8.9"
 
@@ -29,7 +29,7 @@ RUN pip3 install torch torchvision torchaudio -f https://download.pytorch.org/wh
 
 # Run the install.sh script
 RUN mkdir /vmf
-COPY . /vmf
+COPY . /vmf/
 RUN chmod +x ./vmf/install.sh
 RUN cd ./vmf/vmf_contact_main/openpoints/cpp/chamfer_dist && python3 setup.py install
 RUN cd ./vmf/vmf_contact_main/openpoints/cpp/emd && python3 setup.py install
@@ -41,7 +41,6 @@ RUN cd ./vmf/vmf_contact_main/openpoints/cpp/pointops && python3 setup.py instal
 COPY requirements.txt ./
 RUN pip3 install -r requirements.txt
 
-FROM base as final
 
 # Create a non-privileged user that the app will run under.
 # See https://docs.docker.com/go/dockerfile-user-best-practices/
