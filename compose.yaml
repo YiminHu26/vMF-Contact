@@ -11,9 +11,11 @@ services:
   app:
     build:
       context: .
+      shm_size: '40gb'
+    shm_size: '40gb'
     volumes:
       - .:/vmf
-      - /media/HDD2/Yitian_data/data_all:/vmf/data_all
+      - /media/HDD2/Yitian_data/data_all:/data_all
     deploy:
       resources:
         reservations:

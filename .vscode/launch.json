@@ -19,7 +19,7 @@
       "console": "integratedTerminal",
       "args": [
         "--scale", "1.75",
-        "--batch-size", "2",
+        "--batch-size", "4",
         "--embedding_dim", "240",
         //"--pcd_with_rgb",
         "--learning_rate", "1e-5",
@@ -27,9 +27,9 @@
         "--flow_layers", "8",
         
         "--point_backbone", "pointnext-b",
-        "--ckpt","epoch=70-step=54386",
-        "--devices", "4",
-        "--debug",
+        //"--ckpt","epoch=70-step=54386",
+        "--devices", "1",
+        //"--debug",
 
         //"--eval",
         //"--run-finetuning",
