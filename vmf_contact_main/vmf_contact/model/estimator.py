@@ -224,12 +224,7 @@ class vmfContactModule():
         if not ckpt_loaded or self.flow_finetune == 0:
             logger.warning("Train main module from scratch.")
             trainer.fit(main_module, data)
-            best_module = vmfContactLightningModule.load_from_checkpoint(
-                trainer_checkpoint.best_model_path, strict=False,
-                debug=self.args.debug
-            )
-        else:
-            best_module = main_module
+        best_module = main_module
 
         # Fine-tune flow module
         if self.flow_finetune > 0:

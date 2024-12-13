@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=vmf           # Job name
-#SBATCH --output=sbatch_logs/output_%j.log           # Output log file (%j expands to jobID)
-#SBATCH --error=sbatch_logs/error_%j.log             # Error log file
+#SBATCH --output=logs_slurm/output_%j.log           # Output log file (%j expands to jobID)
+#SBATCH --error=logs_slurm/error_%j.log             # Error log file
 #SBATCH --mem=100G                       # Total memory per task
 #SBATCH --time=00:10:00                  # Time limit (hh:mm:ss)
 #SBATCH --gres=gpu:1                     # Number of GPUs (if needed)
