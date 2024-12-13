@@ -1,1 +1,0 @@
-python vmf_contact_main/train.py --scale 1.75 --batch-size 4 --embedding_dim 240 --learning_rate 1e-5 --prob_baseline post --flow_layers 8 --point_backbone pointnext-b --devices 1 --flow_finetune 0 --num_workers 10

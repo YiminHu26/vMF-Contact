@@ -4,4 +4,4 @@ __pycache__
 *.pth
 .venv
 *.ckpt
-data_all
+logs_slurm/*
