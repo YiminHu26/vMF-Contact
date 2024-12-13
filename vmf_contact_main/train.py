@@ -16,6 +16,11 @@ print(torch.__version__)
 print("Cuda available: ", torch.cuda.is_available())
 print("Cuda device number: ", torch.cuda.device_count())
 
+data_path = os.environ.get("LSDFPROJECTS", "../..")
+if not os.path.exists(data_path):
+    data_path = "../.."
+print(f"Current data path: {data_path}")
+
 from vmf_contact import vmfContactModule
 from vmf_contact import DATASET_REGISTRY
 from openpoints.utils import EasyConfig
@@ -262,15 +267,16 @@ def get_args_parser(
             5e-2,
             0.1,
         ],
-        #data_root_dir="../../data_all/data_debug",
-        data_root_dir=glob.glob("../../data_all/data*"),
-        data_root_dir_test=["../../data_all/data4"],
-        data_root_dir_debug=["../../data_all/data_debug"],
+        #data_root_dir=f"{data_path}/data_all/data_debug",
+        data_root_dir=glob.glob(f"{data_path}/data_all/data*"),
+        data_root_dir_test=[f"{data_path}/data_all/data4"],
+        data_root_dir_debug=[f"{data_path}/data_all/data_debug"],
     )
     return parser
 
 
 import yaml
+print(f"{data_path}/data_all/data*")
 def parse_args_from_yaml(config_path: str):
     # Load default configurations from YAML
     with open(config_path, 'r') as f:
@@ -369,5 +375,7 @@ def main_module(
 
 
 if __name__ == "__main__":
-    args = get_args_parser(add_help=True).parse_args()
-    main_module(args)
+    current_file_folder = os.path.dirname(os.path.abspath(__file__))
+    #args = get_args_parser(add_help=True).parse_args()
+    main_module(parse_args_from_yaml(current_file_folder + "/config.yaml"))
+    #main_module(args)
