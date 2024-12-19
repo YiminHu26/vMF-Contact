@@ -625,6 +625,7 @@ class vmfContactLightningModule(pl.LightningModule):
         grasp_width_th=0.1,
         graspness_th=0.4,
         pcd_from_prompt=None,
+        convention="xzy"
         ):
         pcd = torch.tensor(pcd, device=self.device, dtype=torch.float32)
         assert pcd.size(-1) == 3
@@ -697,18 +698,19 @@ class vmfContactLightningModule(pl.LightningModule):
         approach = approach[filter]
         graspness = graspness[filter]
 
-        self.vis_grasps(
-            samples=pcd,
-            cp=cp,
-            cp2=cp2,
-            kappa=kappa,
-            approach=approach,
-            score = graspness,
-        )
+        if False:
+            self.vis_grasps(
+                samples=pcd,
+                cp=cp,
+                cp2=cp2,
+                kappa=kappa,
+                approach=approach,
+                score = graspness,
+            )
         
         # rotation approach to 6d pose
         # approach is z, baseline is x
-        poses = rotation_from_contact(baseline=baseline, approach=approach, translation=mid_pt)
+        poses = rotation_from_contact(baseline=baseline, approach=approach, translation=mid_pt, convention=convention)
 
         sample_num = min(sample_num, poses.size(0))
         # sort poses by graspness
@@ -855,34 +857,37 @@ def over_or_re_sample(pcd, num_points):
         pcd = torch.gather(pcd, 0, indices.unsqueeze(-1).expand(-1, c))
     return pcd
 
-def rotation_from_contact(baseline, approach, translation):
-    # Example tensors for predictions["baseline"], approach, and translation
-    x = baseline  # Baseline vector (B, 3)
-    z = approach                 # Approach vector (B, 3)
+def rotation_from_contact(baseline, approach, translation, convention = "xzy"):
+    
+    # Define the front direction (negative x-axis)
+    up_direction = torch.tensor([-1, 0, 0], dtype=baseline.dtype, device=baseline.device)
+    
+    if convention == "xzy":
+        x = baseline  # Baseline vector (B, 3)
+        z = approach  # Approach vector (B, 3)
+        x_normalized = torch.nn.functional.normalize(x, dim=-1)
+        z_normalized = torch.nn.functional.normalize(z, dim=-1)
+        y = torch.cross(z_normalized, x_normalized)
+        y_normalized = torch.nn.functional.normalize(y, dim=-1)
+        
+        # Ensure y is aligned with the up direction
+        dot_product = torch.sum(y_normalized * up_direction, dim=-1, keepdim=True)  # dot product with up direction
+        y_normalized = torch.where(dot_product < 0, -y_normalized, y_normalized)  # Flip y if it's pointing downward
+        
+    
+    elif convention == "zyx":
+        z = baseline  # Baseline vector (B, 3)
+        y = approach  # Approach vector (B, 3)
+        z_normalized = torch.nn.functional.normalize(z, dim=-1)
+        y_normalized = torch.nn.functional.normalize(y, dim=-1)
+        x = torch.cross(z_normalized, y_normalized)
+        x_normalized = torch.nn.functional.normalize(x, dim=-1)
+        
+        # Ensure x is aligned with the up direction
+        dot_product = torch.sum(x_normalized * up_direction, dim=-1, keepdim=True)  # dot product with up direction
+        x_normalized = torch.where(dot_product < 0, -x_normalized, x_normalized)  # Flip x if it's pointing downward
 
-    # Step 1: Normalize x and z to ensure they are unit vectors
-    x_normalized = torch.nn.functional.normalize(x, dim=-1)
-    z_normalized = torch.nn.functional.normalize(z, dim=-1)
-
-    # Step 2: Compute the y vector (orthogonal to both x and z, pointing up)
-    # First compute y as the cross product of z and x
-    y = torch.cross(z_normalized, x_normalized)
-
-    # Define the front direction (positive y-axis)
-    up_direction = torch.tensor([-1, 0, 0], dtype=x.dtype, device=x.device)
-
-    # Ensure y is aligned with the up direction
-    dot_product = torch.sum(y * up_direction, dim=-1, keepdim=True)  # dot product with up direction
-    y = torch.where(dot_product < 0, -y, y)  # Flip y if it's pointing downward
-
-    # Step 3: Normalize y to ensure it's a unit vector
-    y_normalized = torch.nn.functional.normalize(y, dim=-1)
-
-    # Step 4: Recompute x to ensure orthogonality (optional)
-    x_normalized = torch.cross(y_normalized, z_normalized)
-
-    # Step 5: Construct the rotation matrix
-    # The rotation matrix is constructed by stacking the x, y, z vectors as columns.
+    # Construct the rotation matrix
     rotation_matrices = torch.stack([x_normalized, y_normalized, z_normalized], dim=-1)  # Shape (B, 3, 3)
 
     # Step 6: Construct the homogeneous transformation matrix
