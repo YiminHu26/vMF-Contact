@@ -623,7 +623,7 @@ class vmfContactLightningModule(pl.LightningModule):
         sample_num=1,
         grasp_height_th=5e-3,
         grasp_width_th=0.1,
-        graspness_th=0.4,
+        graspness_th=0.2,
         pcd_from_prompt=None,
         convention="xzy"
         ):
@@ -714,13 +714,13 @@ class vmfContactLightningModule(pl.LightningModule):
 
         sample_num = min(sample_num, poses.size(0))
         # sort poses by graspness
-        print(poses) # TODO: change to graspness
         poses_candidates = poses[torch.argsort(kappa, descending=True)][:sample_num] # TODO: change to graspness
 
         #randomly sample 1 poses
         sample_num = min(sample_num, poses_candidates.size(0))
         pose_chosen = poses_candidates[random.randint(0, sample_num-1)].squeeze(0)
         
+        print("Chosen pose", pose_chosen)
         return pose_chosen.cpu().numpy()
 
 
@@ -876,16 +876,16 @@ def rotation_from_contact(baseline, approach, translation, convention = "xzy"):
         
     
     elif convention == "zyx":
-        z = baseline  # Baseline vector (B, 3)
+        x = baseline  # Baseline vector (B, 3)
         y = approach  # Approach vector (B, 3)
-        z_normalized = torch.nn.functional.normalize(z, dim=-1)
-        y_normalized = torch.nn.functional.normalize(y, dim=-1)
-        x = torch.cross(z_normalized, y_normalized)
         x_normalized = torch.nn.functional.normalize(x, dim=-1)
+        y_normalized = torch.nn.functional.normalize(y, dim=-1)
+        z = torch.cross(x_normalized, y_normalized)
+        z_normalized = torch.nn.functional.normalize(z, dim=-1)
         
         # Ensure x is aligned with the up direction
-        dot_product = torch.sum(x_normalized * up_direction, dim=-1, keepdim=True)  # dot product with up direction
-        x_normalized = torch.where(dot_product < 0, -x_normalized, x_normalized)  # Flip x if it's pointing downward
+        # dot_product = torch.sum(x_normalized * up_direction, dim=-1, keepdim=True)  # dot product with up direction
+        # x_normalized = torch.where(dot_product < 0, -x_normalized, x_normalized)  # Flip x if it's pointing downward
 
     # Construct the rotation matrix
     rotation_matrices = torch.stack([x_normalized, y_normalized, z_normalized], dim=-1)  # Shape (B, 3, 3)

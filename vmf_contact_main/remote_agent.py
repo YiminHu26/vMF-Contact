@@ -372,8 +372,7 @@ def main_module(args: argparse.Namespace):
         logger.info("No checkpoint loaded")
         return None
 
-
-if __name__ == "__main__":
+def main():
     current_file_folder = os.path.dirname(os.path.abspath(__file__))
 
     agent = main_module(parse_args_from_yaml(current_file_folder + "/config.yaml"))
@@ -381,6 +380,7 @@ if __name__ == "__main__":
     client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     pcd_resize=np.array(1)
     chunk_size = 4096
+    range = 0.5
     
     while True:
         print("Connecting to the server ...")
@@ -406,6 +406,7 @@ if __name__ == "__main__":
                     break
                 data += packet
             pcds_raw = pickle.loads(data)
+            num_poses = len(pcds_raw)
             pcds_raw = pcds_raw.astype(np.float32) / 1000
             pcd_mean = np.mean(pcds_raw[..., :2], axis=1, keepdims=True)
             
@@ -415,9 +416,9 @@ if __name__ == "__main__":
             try:
                 pcds_processed = []
                 for pcd in pcds:
-                    pcd = pcd[(pcd[:, 0] > -0.3 / pcd_resize) & (pcd[:, 0] < 0.3 / pcd_resize)]
-                    pcd = pcd[(pcd[:, 1] > -0.3 / pcd_resize) & (pcd[:, 1] < 0.3 / pcd_resize)]
-                    pcd = pcd[(pcd[:, 2] > -0.01) & (pcd[:, 2] < 0.45)]
+                    pcd = pcd[(pcd[:, 0] > -range / pcd_resize) & (pcd[:, 0] < range / pcd_resize)]
+                    pcd = pcd[(pcd[:, 1] > -range / pcd_resize) & (pcd[:, 1] < range / pcd_resize)]
+                    pcd = pcd[(pcd[:, 2] > -0.02) & (pcd[:, 2] < 0.45)]
                     assert pcd.shape[0] > 0
                     pcds_processed.append(pcd)
             except:
@@ -452,20 +453,21 @@ if __name__ == "__main__":
             # o3d.visualization.draw_geometries([o3d_pcd_from_prompt, mesh_frame])
 
 
+            poses_chosen = np.zeros((num_poses, 4, 4))  # Pre-allocate array for efficiency
             # inference
             if pcds_processed is not None:
                 # Assuming each pose_chosen is a 4x4 matrix
-                num_poses = len(pcds_processed)
-                poses_chosen = np.zeros((num_poses, 4, 4))  # Pre-allocate array for efficiency
-
                 for i, pcd_processed in enumerate(pcds_processed):
-                    pose_chosen = agent.inference(pcd_processed, pcd_from_prompt=pcd_from_prompt, convention = "zyx")
+                    pose_chosen = agent.inference(pcd_processed, 
+                                                  pcd_from_prompt=pcd_from_prompt,
+                                                  grasp_height_th=-0.02, 
+                                                  convention = "zyx")
+                    if pose_chosen is None:
+                        continue
                     pose_chosen[:3, 3] = pose_chosen[:3, 3] * pcd_resize
                     pose_chosen[:2, 3] += pcd_mean[i][0]
                     poses_chosen[i] = pose_chosen  # Assign to the pre-allocated array
-                poses_chosen = torch.tensor(poses_chosen, dtype=torch.float32)
-            else:
-                poses_chosen = None
+            poses_chosen = torch.tensor(poses_chosen, dtype=torch.float32)
                     
             # Visualize the poses
             # frames = []
@@ -492,7 +494,11 @@ if __name__ == "__main__":
             data = pickle.dumps(poses_chosen)
             data_length = len(data)
             client.sendall(struct.pack('>I', data_length))
-            client.sendall(data)        
+            client.sendall(data)   
+             
+if __name__ == "__main__":
+    main()
+        
         
         
         
