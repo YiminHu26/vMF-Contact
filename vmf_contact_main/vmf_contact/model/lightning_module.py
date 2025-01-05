@@ -623,7 +623,7 @@ class vmfContactLightningModule(pl.LightningModule):
         sample_num=1,
         grasp_height_th=5e-3,
         grasp_width_th=0.1,
-        graspness_th=0.2,
+        graspness_th=0.6,
         pcd_from_prompt=None,
         convention="xzy"
         ):
@@ -698,7 +698,7 @@ class vmfContactLightningModule(pl.LightningModule):
         approach = approach[filter]
         graspness = graspness[filter]
 
-        if False:
+        if True:
             self.vis_grasps(
                 samples=pcd,
                 cp=cp,
@@ -740,7 +740,7 @@ def perpendicular_highest_z(v):
     u = torch.stack([u_x, u_y, vz*0], dim=1)
     u = u / torch.norm(u, dim=1, keepdim=True)
 
-    u = torch.cross(v, u)
+    u = torch.linalg.cross(v, u)
     return u
 
 
