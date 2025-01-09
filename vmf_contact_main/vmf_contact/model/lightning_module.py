@@ -623,7 +623,7 @@ class vmfContactLightningModule(pl.LightningModule):
         sample_num=1,
         grasp_height_th=5e-3,
         grasp_width_th=0.1,
-        graspness_th=0.6,
+        graspness_th=0.3,
         pcd_from_prompt=None,
         convention="xzy"
         ):

@@ -26,7 +26,8 @@ import tf2_geometry_msgs
 from PIL import Image
 from lang_sam import LangSAM
 from .camera_utils import *
-
+import time
+import subprocess
 use_langsam = True
 
 langsam_model = LangSAM() if use_langsam else None
@@ -226,9 +227,9 @@ class PCDListener(Node):
         for file in os.listdir(current_file_folder):
             if file.endswith(".jpg"):
                 os.remove(os.path.join(current_file_folder, file))
-
         
         if langsam_model is not None:
+            time_curr = time.time()
             prompt_input = ""
             while prompt_input == "":
                 prompt_input = input("Please enter what you would like to grasp: ")
@@ -238,6 +239,9 @@ class PCDListener(Node):
             self.masked_pcd_dict = {}
             # predict masks with lang_sam
             results = langsam_model.predict([Image.fromarray(img)], [". ".join(prompt_input)])
+
+            print(f"Time taken for inference: {time.time() - time_curr}")
+
             print(f"save images to {current_file_folder}")
             cv2.imwrite(f"{current_file_folder}/image.jpg", cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
             
@@ -298,19 +302,19 @@ class PCDListener(Node):
         pcd = (pcd_raw - self.pcd_shift) / self.pcd_resize
         pcd = pcd[(pcd[:, 0] > -0.3 / self.pcd_resize) & (pcd[:, 0] < 0.3 / self.pcd_resize)]
         pcd = pcd[(pcd[:, 1] > -0.3 / self.pcd_resize) & (pcd[:, 1] < 0.3 / self.pcd_resize)]
-        pcd = pcd[(pcd[:, 2] > -0.01) & (pcd[:, 2] < 0.45)]
+        pcd = pcd[(pcd[:, 2] > 0.03) & (pcd[:, 2] < 0.45)]
 
-        # print("Processed point cloud: ", pcd.shape)
+        print("Processed point cloud: ", pcd.shape)
 
         # # Viszualize the point cloud
-        # o3d_pcd = o3d.geometry.PointCloud(
-        #     o3d.utility.Vector3dVector(pcd)
-        # )
-        # # draw  the origin as a red sphere
-        # mesh_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(
-        #     size=0.1, origin=[0, 0, 0]
-        # )
-        # o3d.visualization.draw_geometries([o3d_pcd, mesh_frame])
+        o3d_pcd = o3d.geometry.PointCloud(
+            o3d.utility.Vector3dVector(pcd)
+        )
+        # draw  the origin as a red sphere
+        mesh_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(
+            size=0.1, origin=[0, 0, 0]
+        )
+        o3d.visualization.draw_geometries([o3d_pcd, mesh_frame])
 
         # Process the prompt point cloud
         if langsam_model is not None:
