@@ -172,7 +172,7 @@ class PCDListener(Node):
 
     
     def process_point_cloud(self):
-
+        # TODO: add rgb image processing
         if self.last_point_cloud_msg is None:
             print("No point cloud message received yet.")
             return None, False
@@ -281,11 +281,32 @@ class PCDListener(Node):
             self.open_gripper()
             user_input = input("Enter 's' to start next capture and 'q' to quit: ")
             if user_input == "s":
+
+                ####select best view until grasp criterien is met
+                ## TODO:
+                # pcd, identifier, rgbd = self.process_point_cloud_and_rgbd()
+                # if not identifier:
+                #     print("No object detected, please try again.")
+                #     continue
+                # grasp_criterien, grasp = self.agent_inference(pcd)
+                ## while not grasp_criterien:
+                #      pose = self.VLM_inference(rgbd) #including process point cloud, llm inference: rgbd -> pose
+                #      self.change_view(pose) # Move robot to the pose
+                #      pcd, identifier, rgbd = self.process_point_cloud_and_rgbd()
+                #      if not identifier:
+                #          print("No object detected, please try again.")
+                #          continue
+                #      grasp_criterien, grasp = self.agent_inference(pcd)
+                ####      
+
+                ### TODO: no need any more
                 pcd, identifier = self.process_point_cloud()
                 if not identifier:
                     print("No object detected, please try again.")
                     continue
-                grasp = self.agent_inference(pcd)
+                grasp = self.agent_inference(pcd) 
+                ###
+
                 if grasp is not None:
                     self.execute_grasp(grasp)
                 else:
@@ -293,9 +314,13 @@ class PCDListener(Node):
             elif user_input == "q":
                 self.shutdown = True
                 break
+
+    def VLM_inference(self, rgbd):
+        # TODO: vlm inference
+        raise NotImplementedError
     
     def agent_inference(self, pcd_raw):
-
+        # TODO: add criteria for grasp execution
         # Process the point cloud
         self.pcd_shift = pcd_raw.mean(axis=0)
         self.pcd_shift[2] = 0.0
@@ -377,6 +402,95 @@ class PCDListener(Node):
         print("Chosen pose: ", pose_chosen)
 
         return pose_chosen
+    
+
+    def change_view(self, pose):
+
+        self.get_logger().info("Sending goal now...")
+        grasp_pose = PoseStamped()
+        grasp_pose.header.frame_id = "base_link"
+        grasp_pose.pose.position.x = pose[0]
+        grasp_pose.pose.position.y = pose[1]
+        grasp_pose.pose.position.z = pose[2]
+        grasp_pose.pose.orientation.x = pose[3]
+        grasp_pose.pose.orientation.y = pose[4]
+        grasp_pose.pose.orientation.z = pose[5]
+        grasp_pose.pose.orientation.w = pose[6]
+
+        self.publish_new_frame("grasp_before", grasp_pose)
+
+        grasp_pose2 = copy.deepcopy(grasp_pose)
+
+        try:
+            t_world_2_base_link = self.tf_buffer.lookup_transform(
+                "world", "base_link", rclpy.time.Time()
+            )
+
+            # transform posestamped from base_link to world using t_world_2_base_link
+            grasp_pose2.pose = tf2_geometry_msgs.do_transform_pose(grasp_pose.pose, t_world_2_base_link)
+            grasp_pose2.header.frame_id = "world"
+
+            print("Grasp pose in world frame: ", grasp_pose2.pose.position)
+            print("Grasp orientation in world frame: ", grasp_pose2.pose.orientation)
+
+        except TransformException as ex:
+            self.get_logger().info(
+                f"Could not transform pose from base_link to world: {ex}"
+            )
+            return
+        
+
+        pregrasp_pose = self.create_pregrasp_pose(copy.deepcopy(grasp_pose2))
+
+        self.publish_new_frame("grasp_after", grasp_pose2)
+        self.publish_new_frame("pregrasp", pregrasp_pose)
+
+        print("Grasp pose frame ", grasp_pose2.header.frame_id)
+        print("Pregrasp frame ", pregrasp_pose.header.frame_id)
+        
+        # ask if the user wants to continue
+        user_input = input("Press 'c' to continue or any other key to quit: ")
+
+        if user_input.lower() == 'c':
+
+            self.stop_event.clear()
+            self.movement_failed_flag.clear()
+            self.movement_finished_flag.clear()
+            state_machine_state = IDLE
+            
+            while True:
+                if state_machine_state == IDLE:
+                    # Send the goal to move to the pregrasp pose
+                    self.send_goal(pregrasp_pose)
+                    # Start the state machine
+                    state_machine_state = MOVING_TO_PREGRASP
+                    self.get_logger().info("StateMachine switched to MOVING_TO_PREGRASP")
+                    # Create a thread to handle the input
+                    self.cancel_thread = threading.Thread(target=self.get_input)
+                    self.cancel_thread.start()
+
+                elif state_machine_state == MOVING_TO_PREGRASP:
+                    if self.stop_event.is_set():
+                        self.stop_event.clear()
+                        self.get_logger().info("Goal cancelled")
+                        self.send_goal(self.camera_ready_pose)
+                        state_machine_state = MOVING_TO_CAMERA_READY
+                        self.get_logger().info("StateMachine switched to MOVING_TO_CAMERA_READY")
+
+                elif state_machine_state == MOVING_TO_CAMERA_READY:
+                    # Wait for the action server to finish
+                    if self.movement_finished_flag.is_set():
+                        self.movement_finished_flag.clear()
+                        state_machine_state = IDLE
+                        self.get_logger().info("State machine finished")
+                        break
+                    if self.movement_failed_flag.is_set():
+                        self.movement_failed_flag.clear()
+                        state_machine_state = FAILED
+                        self.get_logger().info("StateMachine switched to FAILED")
+
+                elif state_machine_state == FAILED:
+                    self.get_logger().info("State machine failed")
     
 
     def execute_grasp(self, pose):
