@@ -374,7 +374,7 @@ class PCDListener(Node):
                 # pcd.colors = o3d.utility.Vector3dVector(pcd_masked_color[:, ::-1] / 255)
                 # o3d.visualization.draw_geometries([pcd], window_name=text)
 
-        return pcd_numpy_base_link, self.last_image_msg, self.last_depth_msg, True
+        return pcd_numpy_base_link, self.last_image_msg, self.last_depth_msg, t_base_link_2_camera, True
 
     def handle_user_input(self):
 
@@ -386,20 +386,19 @@ class PCDListener(Node):
             if user_input == "s":
 
                 ###select best view until grasp criterien is met
-                pcd, rgb, d, identifier = self.process_point_cloud_and_rgbd()
+                pcd, rgb, d, cam_pose, identifier = self.process_point_cloud_and_rgbd()
                 if not identifier:
                     print("No object detected, please try again.")
                     continue
                 # grasp, grasp_criterien = self.agent_inference(pcd)
                 grasp_criterien = False # TODO: use agent to give grasp criterien instead of False, 
                                         # this is a test for view selection
-                pose = self.camera_ready_pose # initial pose
                 while not grasp_criterien:
-                    pose = self.VLM_inference(pose, rgb, d) #including process point cloud, llm inference: rgbd -> pose
-                    print("VLM pose: ", pose)
-                    self.change_view(pose) # Move robot to the pose
+                    cam_pose = self.VLM_inference(cam_pose, rgb, d) #including process point cloud, llm inference: rgbd -> pose
+                    print("VLM pose: ", cam_pose)
+                    self.change_view(cam_pose) # Move robot to the pose
                     print("Changed view")
-                    pcd, rgb, d, identifier = self.process_point_cloud_and_rgbd()
+                    pcd, rgb, d, cam_pose, identifier = self.process_point_cloud_and_rgbd()
                     if not identifier:
                         print("No object detected, please try again.")
                         continue
@@ -432,16 +431,24 @@ class PCDListener(Node):
                                              current_orientation.y, 
                                              current_orientation.z, 
                                              current_orientation.w])
-        camera_pos = [current_position.x, current_position.y, current_position.z]
+        pos = [current_position.x, current_position.y, current_position.z]
 
         # TODO: add vlm inference
         # camera_pos_increment, gaze_point = self.vlm_agent(rgb, d)
         # camera_pos = camera_pos + camera_pos_increment * 0.1
-        gaze_point = [-0.1 -.4, -0.86 -.18, 0.9] # TODO: remove this line, this is a test for gazing at middle of the desk
+        gaze_point_robot = [-0.1, -0.86, 0.9] # TODO: remove this line, this is a test for gazing at middle of the desk
 
-        quaternion = look_at_transformation(gaze_point, camera_pos)
+        quaternion = look_at_transformation(gaze_point_robot, pos)
+        
+        pose_stamped.pose.position.x = pos[0]
+        pose_stamped.pose.position.y = pos[1]
+        pose_stamped.pose.position.z = pos[2]
+        pose_stamped.pose.orientation.x = quaternion[0]
+        pose_stamped.pose.orientation.y = quaternion[1]
+        pose_stamped.pose.orientation.z = quaternion[2]
+        pose_stamped.pose.orientation.w = quaternion[3]
 
-        return camera_pos + quaternion
+        return pose_stamped
     
     def agent_inference(self, pcd_raw):
         # TODO: add criteria for grasp execution
@@ -528,34 +535,28 @@ class PCDListener(Node):
         return pose_chosen, False
     
 
-    def change_view(self, pose):
+    def change_view(self, pose_stamped):
 
         self.get_logger().info("Sending goal now...")
-        grasp_pose = PoseStamped()
-        grasp_pose.header.frame_id = "base_link"
-        grasp_pose.pose.position.x = pose[0]
-        grasp_pose.pose.position.y = pose[1]
-        grasp_pose.pose.position.z = pose[2]
-        grasp_pose.pose.orientation.x = pose[3]
-        grasp_pose.pose.orientation.y = pose[4]
-        grasp_pose.pose.orientation.z = pose[5]
-        grasp_pose.pose.orientation.w = pose[6]
 
-        self.publish_new_frame("grasp_before", grasp_pose)
+        self.publish_new_frame("new_view", pose_stamped)
 
-        grasp_pose2 = copy.deepcopy(grasp_pose)
+        pose_stamped2 = copy.deepcopy(pose_stamped)
 
         try:
             t_world_2_base_link = self.tf_buffer.lookup_transform(
                 "world", "base_link", rclpy.time.Time()
             )
-
+            t_camera_2_tcp = self.tf_buffer.lookup_transform(
+                "camera_link","tcp", rclpy.time.Time()
+            )
             # transform posestamped from base_link to world using t_world_2_base_link
-            grasp_pose2.pose = grasp_pose.pose
-            grasp_pose2.header.frame_id = "world"
+            pose2 = tf2_geometry_msgs.do_transform_pose(pose_stamped.pose, t_world_2_base_link)
+            pose_stamped2.pose = tf2_geometry_msgs.do_transform_pose(t_camera_2_tcp, pose2)
+            pose_stamped2.header.frame_id = "world"
 
-            print("View pose in world frame: ", grasp_pose2.pose.position)
-            print("View orientation in world frame: ", grasp_pose2.pose.orientation)
+            print("View pose in world frame: ", pose_stamped2.pose.position)
+            print("View orientation in world frame: ", pose_stamped2.pose.orientation)
 
         except TransformException as ex:
             self.get_logger().info(
@@ -574,7 +575,7 @@ class PCDListener(Node):
         while True:
             if state_machine_state == IDLE:
                 # Send the goal to move to the pregrasp pose
-                self.send_goal(grasp_pose2)
+                self.send_goal(pose_stamped2)
                 # Start the state machine
                 state_machine_state = MOVING_TO_PREGRASP
                 self.get_logger().info("StateMachine switched to MOVING_TO_PREGRASP")
