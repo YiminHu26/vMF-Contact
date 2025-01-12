@@ -1,6 +1,4 @@
 from typing import Any, Dict, Tuple, cast
-from ..datasets import DataModule
-import einops
 
 import numpy as np
 import open3d as o3d
@@ -14,6 +12,7 @@ from openpoints.cpp.chamfer_dist import ChamferDistanceL1
 from openpoints.optim import build_optimizer_from_cfg
 from openpoints.scheduler import build_scheduler_from_cfg
 import random
+import os
 
 Batch = Tuple[torch.Tensor, torch.Tensor]
 loss_terms_orientation = {
@@ -97,8 +96,6 @@ class vmfContactLightningModule(pl.LightningModule):
 
         self.forward_and_loss(batch)
 
-        self.log_dict(self.losses, sync_dist=True, batch_size=self.batch_size)
-
         self.log(
             "bsl",
             self.losses["baseline"],
@@ -118,6 +115,7 @@ class vmfContactLightningModule(pl.LightningModule):
                 prog_bar=True,
                 batch_size=self.batch_size,
             )
+
         if "reconstruction_loss" in self.losses.keys():
             self.log(
                 "recon",
@@ -157,7 +155,6 @@ class vmfContactLightningModule(pl.LightningModule):
     def on_validation_start(self) -> None:
         self.uncertainty_estimator.train()
     
-    
     def validate(self, dataloader: torch.utils.data.DataLoader):
         for batch_idx, batch in dataloader:
             self.validation_step(batch, batch_idx)
@@ -166,7 +163,7 @@ class vmfContactLightningModule(pl.LightningModule):
     def validation_step(self, batch, _batch_idx):
         self.uncertainty_estimator.flow.eval()
         
-        pred = self.forward_and_loss(batch)
+        self.forward_and_loss(batch)
         loss = sum(list(self.losses.values()))
 
         self.log_dict(self.losses, sync_dist=True, batch_size=self.batch_size)
@@ -181,9 +178,8 @@ class vmfContactLightningModule(pl.LightningModule):
         self.model.train()
 
     def test_step(self, batch, _batch_idx):
-        self.uncertainty_estimator.flow.eval()
-        
-        pred = self.forward_and_loss(batch, val=True)
+        self.uncertainty_estimator.flow.eval()        
+        self.forward_and_loss(batch, val=True)
         loss = sum(list(self.losses.values()))
 
         self.log_dict(self.losses, sync_dist=True, batch_size=self.batch_size)
@@ -289,8 +285,8 @@ class vmfContactLightningModule(pl.LightningModule):
         if self.prob_baseline == "post":
            self._flow_loss(pred)
 
-        return pred
-
+        return pred        
+            
     def _compute_reconstruction_loss(self, pred, pcds):
         pred_pcd_bt = pred["reconstructed_pcds"]
         self.losses["reconstruction_loss"] = self.reconstruction_loss(pred_pcd_bt, pcds)
@@ -460,8 +456,6 @@ class vmfContactLightningModule(pl.LightningModule):
                 self.losses["graspness"] = self.losses["graspness"] + graspness_loss
                 self.ausc.update(graspness_bt[i], graspness_gt_all, "graspness")
 
-            
-
             # Visualize the predicted contact points and the baseline vector
             if self.debug:  
             # if self.losses["baseline"] > 1.8:   
@@ -508,7 +502,6 @@ class vmfContactLightningModule(pl.LightningModule):
         for k, v in loss_terms_orientation.items():
             self.losses[k] *= v / self.batch_size
 
-    
     def _vis_pcd(self, pred, gt):
 
         pred = pred.detach().cpu().numpy() if isinstance(pred, torch.Tensor) else pred
@@ -523,7 +516,6 @@ class vmfContactLightningModule(pl.LightningModule):
         pcd_gt.paint_uniform_color([0.1, 0.1, 0.7])
 
         o3d.visualization.draw_geometries([pcd])
-
 
     def _flow_loss(self, pred, groups=20):
         # torch.autograd.set_detect_anomaly(True)
@@ -569,13 +561,6 @@ class vmfContactLightningModule(pl.LightningModule):
             score = score.cpu().numpy() if isinstance(score, torch.Tensor) else score
         if kappa is not None:
             kappa = kappa.detach().cpu().numpy() if isinstance(kappa, torch.Tensor) else kappa
-
-        # Visualize the sampled points
-        if samples is not None:
-            samples = samples.cpu().numpy() if isinstance(samples, torch.Tensor) else samples
-            pcd = o3d.geometry.PointCloud()
-            pcd.points = o3d.utility.Vector3dVector(samples)
-            vis_list.append(pcd)
 
         # Connect line between the cp_gt anchor and the cp
         if cp_gt is not None and cp is not None:
