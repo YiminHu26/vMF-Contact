@@ -91,7 +91,6 @@ class PCDListener(Node):
             self, GripperCommand, "robotiq_2f_urcap_adapter/gripper_command"
         )
 
-
         self.tf_static_broadcaster = StaticTransformBroadcaster(self)
 
         state_machine_state = IDLE
@@ -395,7 +394,7 @@ class PCDListener(Node):
         np.savez(f"/home/yitian/data_active_grasp/{time.strftime('%Y-%m-%d_%H-%M-%S')}.npz", **dict_rgbd)
 
 
-        return pcd_numpy_base_link, self.last_image_msg, self.last_depth_msg, cam_pose_robot, True
+        return (pcd_numpy_base_link, self.last_image_msg, self.last_depth_msg, cam_pose_robot), True
 
     def handle_user_input(self):
 
@@ -407,7 +406,7 @@ class PCDListener(Node):
             if user_input == "s":
 
                 ###select best view until grasp criterien is met
-                pcd, rgb, d, cam_pose, identifier = self.process_point_cloud_and_rgbd()
+                (pcd, rgb, d, cam_pose), identifier = self.process_point_cloud_and_rgbd()
                 if not identifier:
                     print("No object detected, please try again.")
                     continue
@@ -415,24 +414,24 @@ class PCDListener(Node):
                 grasp_criterien = False # TODO: use agent to give grasp criterien instead of False, 
                                         # this is a test for view selection
                 
-                for azimuth in range(45, 0, -2):
-                    for elevation in range(150, 160, 2):
+                for azimuth in range(-90, 90, 10):
+                    for elevation in range(50, 140, 10):
                         cam_pose = self.VLM_inference(cam_pose, rgb, d, azimuth, elevation) #including process point cloud, llm inference: rgbd -> pose
                         print("VLM pose: ", cam_pose)
                         self.change_view(cam_pose, elevation, azimuth) # Move robot to the pose
                         print("Changed view")
-                        pcd, rgb, d, cam_pose, identifier = self.process_point_cloud_and_rgbd()
+                        (pcd, rgb, d, cam_pose), identifier = self.process_point_cloud_and_rgbd()
                         if not identifier:
                             print("No object detected, please try again.")
                             continue
-                        # grasp_criterien, grasp = self.agent_inference(pcd) # TODO: see above
+                        grasp_criterien, grasp = self.agent_inference(pcd) # TODO: see above
 
                 ### TODO: no need any more
                 pcd, identifier = self.process_point_cloud()
                 if not identifier:
                     print("No object detected, please try again.")
                     continue
-                grasp = self.agent_inference(pcd) 
+                grasp_criterien, grasp  = self.agent_inference(pcd) 
                 ###
 
                 if grasp is not None:
@@ -459,7 +458,7 @@ class PCDListener(Node):
         # camera_pos_increment, gaze_point = self.vlm_agent(rgb, d)
         # camera_pos = camera_pos + camera_pos_increment * 0.1
         gaze_point_robot = [-0.74, 0.1, 0.031] # TODO: remove this line, this is a test for gazing at middle of the desk
-        dist = .42 # np.linalg.norm(np.array(gaze_point_robot) - np.array(pos))
+        dist = .47 # np.linalg.norm(np.array(gaze_point_robot) - np.array(pos))
         pos = azi_to_pos(azimuth, elevation, dist) # TODO: remove this line, this is a test for view selection
         pos =[pos[i] + gaze_point_robot[i] for i in range(3)]
 
@@ -524,12 +523,18 @@ class PCDListener(Node):
 
 
         # inference
-        pose_chosen = self.agent.inference(pcd, pcd_from_prompt=pcd_from_prompt)
+        pose_chosen = self.agent.inference(pcd, 
+                                        pcd_from_prompt=pcd_from_prompt,
+                                        shift=self.pcd_shift,
+                                        graspness_th=0.3,
+                                        resize=self.pcd_resize)
+        # Add the new geometry for the current frame
+
         if pose_chosen is None:
-            return None
+            return None, False
         # translate back to the original coordinate system
         print("Chosen pose: ", pose_chosen)
-        pose_chosen[:3, 3] = pose_chosen[:3, 3] * self.pcd_resize + self.pcd_shift
+        # pose_chosen[:3, 3] = pose_chosen[:3, 3] * self.pcd_resize + self.pcd_shift
         # Visualize the poses
         # frames = []
 
