@@ -6,6 +6,7 @@ import sensor_msgs.msg as sensor_msgs
 from rclpy.node import Node
 from rclpy.action import ActionClient
 import cv2
+from arm_api2_msgs.action import MoveCartesianPath
 from arm_api2_msgs.action import MoveCartesian
 from control_msgs.action import GripperCommand
 from control_msgs.msg import GripperCommand as GripperCommandMsg
@@ -28,6 +29,8 @@ from lang_sam import LangSAM
 from .camera_utils import *
 import time
 import subprocess
+from scipy.spatial.transform import Rotation as R
+
 use_langsam = False
 
 langsam_model = LangSAM() if use_langsam else None
@@ -91,6 +94,10 @@ class PCDListener(Node):
             self, GripperCommand, "robotiq_2f_urcap_adapter/gripper_command"
         )
 
+        self._robot_action_client_traj = ActionClient(
+            self, MoveCartesianPath, "arm/move_to_pose_path"
+        )
+
         self.tf_static_broadcaster = StaticTransformBroadcaster(self)
 
         state_machine_state = IDLE
@@ -110,6 +117,7 @@ class PCDListener(Node):
         self.gripper_movement_finished_flag = threading.Event()
         self.gripper_movement_failed_flag = threading.Event()
         self.stop_event = threading.Event()
+        self.send_traj_flag = threading.Event()
         self.bridge = CvBridge()
 
         self.camera_ready_pose = PoseStamped()
@@ -272,7 +280,7 @@ class PCDListener(Node):
 
         return pcd_numpy_base_link, True
     
-    def process_point_cloud_and_rgbd(self):
+    def process_point_cloud_and_rgbd(self, save_data=False):
         # TODO: add rgb image processing
         if self.last_point_cloud_msg is None:
             print("No point cloud message received yet.")
@@ -378,24 +386,61 @@ class PCDListener(Node):
 
         # save the image, depth, point cloud and camera pose as a dictionary of numpy arrays
         # viszualize the rgbd data
-        cv2.imwrite(f"image.jpg", img[..., ::-1])
-        dict_rgbd = {
-            "image": img,
-            "depth": self.last_depth_msg,
-            "pcd": pcd_numpy_base_link,
-            "cam_pose": [cam_pose_robot.position.x, 
-                         cam_pose_robot.position.y, 
-                         cam_pose_robot.position.z,
-                         cam_pose_robot.orientation.x, 
-                         cam_pose_robot.orientation.y, 
-                         cam_pose_robot.orientation.z, 
-                         cam_pose_robot.orientation.w]
-        }
-        np.savez(f"/home/yitian/data_active_grasp/{time.strftime('%Y-%m-%d_%H-%M-%S')}.npz", **dict_rgbd)
-
+        if save_data:
+            name = f"/home/yitian/data_active_grasp/{cam_pose_robot.position.x}_{cam_pose_robot.position.y}_{cam_pose_robot.position.z}"
+            cv2.imwrite(f"image.jpg", img[..., ::-1])
+            dict_rgbd = {
+                "image": img,
+                "depth": self.last_depth_msg,
+                "pcd": pcd_numpy_base_link,
+                "cam_pose": [cam_pose_robot.position.x, 
+                            cam_pose_robot.position.y, 
+                            cam_pose_robot.position.z,
+                            cam_pose_robot.orientation.x, 
+                            cam_pose_robot.orientation.y, 
+                            cam_pose_robot.orientation.z, 
+                            cam_pose_robot.orientation.w]
+            }
+            np.savez(f"{name}.npz", **dict_rgbd)
 
         return (pcd_numpy_base_link, self.last_image_msg, self.last_depth_msg, cam_pose_robot), True
 
+
+    def generate_trajectory(self):
+        traj = []
+        gaze_point_robot = [-0.74, 0.1, 0.031] # TODO: remove this line, this is a test for gazing at middle of the desk
+        dist = .47 # np.linalg.norm(np.array(gaze_point_robot) - np.array(pos))
+        azi_ele_groups = [
+            [(-90, -50), (30, 155)], 
+            [(-50, 0), (50, 135)],
+            [(0, 50), (50, 135)],
+            [(50, 90), (30, 155)]
+            ]
+        
+        round = 0
+        for azi_ele in azi_ele_groups:
+            for azimuth in range(*azi_ele[0], 5):
+                t = []            
+                ele_range = range(*azi_ele[1]) if round % 2 == 0 else range(*azi_ele[1])[::-1]
+                for elevation in ele_range:
+                    pos = azi_to_pos(azimuth, elevation, dist)
+                    pos =[pos[i] + gaze_point_robot[i] for i in range(3)]
+                    quaternion = look_at_transformation(gaze_point_robot, pos)
+                    t.append(pos + quaternion)
+                round += 1
+                traj.append(self.create_trajectory(t))
+
+        for t in traj:
+            while not self.movement_finished_flag.is_set():
+                camera_data, is_data = self.process_point_cloud_and_rgbd(save_data=True)
+                # if is_data:
+                #     pcd = camera_data[0]
+                #     grasp, grasp_criterien = self.agent_inference(pcd)
+                pass
+            print("Sending trajectory")
+            self.movement_finished_flag.clear()
+            self.send_goal_traj(t)            
+    
     def handle_user_input(self):
 
         while True:
@@ -410,28 +455,30 @@ class PCDListener(Node):
                 if not identifier:
                     print("No object detected, please try again.")
                     continue
+
                 # grasp, grasp_criterien = self.agent_inference(pcd)
                 grasp_criterien = False # TODO: use agent to give grasp criterien instead of False, 
                                         # this is a test for view selection
                 
-                for azimuth in range(-90, 90, 10):
-                    for elevation in range(50, 140, 10):
-                        cam_pose = self.VLM_inference(cam_pose, rgb, d, azimuth, elevation) #including process point cloud, llm inference: rgbd -> pose
-                        print("VLM pose: ", cam_pose)
-                        self.change_view(cam_pose, elevation, azimuth) # Move robot to the pose
-                        print("Changed view")
-                        (pcd, rgb, d, cam_pose), identifier = self.process_point_cloud_and_rgbd()
-                        if not identifier:
-                            print("No object detected, please try again.")
-                            continue
-                        grasp_criterien, grasp = self.agent_inference(pcd) # TODO: see above
+                self.generate_trajectory()
+                
+                while not grasp_criterien:
+                    cam_pose = self.VLM_inference(cam_pose, rgb, d) # Including process point cloud, llm inference: rgbd -> pose
+                    print("VLM pose: ", cam_pose)
+                    self.change_view(cam_pose) # Move robot to the pose
+                    print("Changed view")
+                    (pcd, rgb, d, cam_pose), identifier = self.process_point_cloud_and_rgbd()
+                    if not identifier:
+                        print("No object detected, please try again.")
+                        continue
+                    grasp, grasp_criterien = self.agent_inference(pcd) # TODO: see above
 
                 ### TODO: no need any more
                 pcd, identifier = self.process_point_cloud()
                 if not identifier:
                     print("No object detected, please try again.")
                     continue
-                grasp_criterien, grasp  = self.agent_inference(pcd) 
+                grasp, grasp_criterien = self.agent_inference(pcd)
                 ###
 
                 if grasp is not None:
@@ -442,7 +489,7 @@ class PCDListener(Node):
                 self.shutdown = True
                 break
 
-    def VLM_inference(self, pose: Pose, rgb, d, azimuth, elevation):
+    def VLM_inference(self, pose: Pose, rgb, d):
         # Extract the current pose
         current_position = pose.position
         current_orientation = pose.orientation
@@ -458,9 +505,6 @@ class PCDListener(Node):
         # camera_pos_increment, gaze_point = self.vlm_agent(rgb, d)
         # camera_pos = camera_pos + camera_pos_increment * 0.1
         gaze_point_robot = [-0.74, 0.1, 0.031] # TODO: remove this line, this is a test for gazing at middle of the desk
-        dist = .47 # np.linalg.norm(np.array(gaze_point_robot) - np.array(pos))
-        pos = azi_to_pos(azimuth, elevation, dist) # TODO: remove this line, this is a test for view selection
-        pos =[pos[i] + gaze_point_robot[i] for i in range(3)]
 
         quaternion = look_at_transformation(gaze_point_robot, pos)
         
@@ -526,7 +570,7 @@ class PCDListener(Node):
         pose_chosen = self.agent.inference(pcd, 
                                         pcd_from_prompt=pcd_from_prompt,
                                         shift=self.pcd_shift,
-                                        graspness_th=0.3,
+                                        graspness_th=0.6,
                                         resize=self.pcd_resize)
         # Add the new geometry for the current frame
 
@@ -565,25 +609,31 @@ class PCDListener(Node):
         return pose_chosen, False
     
 
-    def change_view(self, pose_base_link_2_camera, elevation=0, azimuth=0):
+    def camera_robot_pose_to_tcp_world_pose(self, pose_base_link_2_camera: Pose):
+        t_world_2_base_link: TransformStamped = self.tf_buffer.lookup_transform(
+                "world", "base_link", rclpy.time.Time()
+            )
+        t_camera_2_tcp: TransformStamped = self.tf_buffer.lookup_transform(
+            "camera_color_optical_frame","tcp", rclpy.time.Time()
+        )
+        # transform posestamped from base_link to world using t_world_2_base_link
+        pose_world_2_camera = tf2_geometry_msgs.do_transform_pose(pose_base_link_2_camera, t_world_2_base_link)
+        t_world_2_camera = pose_to_transform(pose_world_2_camera, "world")
+        pose_camera_2_tcp = transform_to_pose(t_camera_2_tcp.transform)
+        pose_world_2_tcp = tf2_geometry_msgs.do_transform_pose(pose_camera_2_tcp, t_world_2_camera)
+
+        pose_stamped = pose_stamped_from_pose(pose_world_2_tcp, "world")
+        return pose_stamped, pose_world_2_camera
+    
+
+    def change_view(self, pose_base_link_2_camera):
 
         self.get_logger().info("Sending goal now...")
 
         try:
-            t_world_2_base_link: TransformStamped = self.tf_buffer.lookup_transform(
-                "world", "base_link", rclpy.time.Time()
-            )
-            t_camera_2_tcp: TransformStamped = self.tf_buffer.lookup_transform(
-                "camera_color_optical_frame","tcp", rclpy.time.Time()
-            )
-            # transform posestamped from base_link to world using t_world_2_base_link
-            pose_world_2_camera = tf2_geometry_msgs.do_transform_pose(pose_base_link_2_camera, t_world_2_base_link)
-            t_world_2_camera = pose_to_transform(pose_world_2_camera, "world")
-            pose_camera_2_tcp = transform_to_pose(t_camera_2_tcp.transform)
-            pose_world_2_tcp = tf2_geometry_msgs.do_transform_pose(pose_camera_2_tcp, t_world_2_camera)
+            pose_stamped, pose_world_2_camera = self.camera_robot_pose_to_tcp_world_pose(pose_base_link_2_camera)
 
-            pose_stamped = pose_stamped_from_pose(pose_world_2_tcp, "world")
-            self.publish_new_frame(f"view_ele_{elevation}_azi_{azimuth}", pose_stamped_from_pose(pose_world_2_camera, "world"))
+            self.publish_new_frame(f"camera_target_view", pose_stamped_from_pose(pose_world_2_camera, "world"))
 
             print("View pose in world frame: ", pose_stamped.pose.position)
             print("View orientation in world frame: ", pose_stamped.pose.orientation)
@@ -866,6 +916,24 @@ class PCDListener(Node):
 
         self.tf_static_broadcaster.sendTransform(t)
 
+
+    def send_goal_traj(self, goal_path):
+        goal_msg = MoveCartesianPath.Goal()
+        goal_msg.poses = goal_path
+
+        self.get_logger().info("Waiting for action server...")
+
+        self._robot_action_client_traj.wait_for_server()
+
+        self.get_logger().info("Sending goal request...")
+
+        self._send_goal_future = self._robot_action_client_traj.send_goal_async(
+            goal_msg, feedback_callback=self.robot_feedback_callback 
+        )
+
+        self._send_goal_future.add_done_callback(self.robot_goal_response_callback)
+
+
     def send_goal(self, goal):
         goal_msg = MoveCartesian.Goal()
         goal_msg.goal = goal
@@ -959,6 +1027,16 @@ class PCDListener(Node):
         command.max_effort = 150.0  # 20 N - 235 N
         self.send_gripper_command(command)
 
+    def create_trajectory(self, data):
+        path = []
+        for p in data:
+            rosp = PoseStamped()
+            cam_pose_to_robot = series_to_pose(p)
+            tcp_pose_to_world, _ = self.camera_robot_pose_to_tcp_world_pose(cam_pose_to_robot)
+            rosp.header.frame_id = "world"
+            path.append(tcp_pose_to_world)
+        return path
+
 
 def main(args=None):
     # Boilerplate code.
@@ -1023,6 +1101,17 @@ def look_at_transformation(gaze_point, robot_position):
     quaternion = quaternion_from_matrix(rotation_matrix)
 
     return list(quaternion)
+
+def series_to_pose(series):
+    pose = Pose()
+    pose.position.x = series[0]
+    pose.position.y = series[1]
+    pose.position.z = series[2]
+    pose.orientation.x = series[3]
+    pose.orientation.y = series[4]
+    pose.orientation.z = series[5]
+    pose.orientation.w = series[6]
+    return pose
 
 def pose_to_transform(pose: Pose, header = None) -> TransformStamped:
     tf = TransformStamped()

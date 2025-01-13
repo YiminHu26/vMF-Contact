@@ -13,6 +13,7 @@ from openpoints.cpp.chamfer_dist import ChamferDistanceL1
 from openpoints.optim import build_optimizer_from_cfg
 from openpoints.scheduler import build_scheduler_from_cfg
 from .utils import *
+import threading
 import random
 
 Batch = Tuple[torch.Tensor, torch.Tensor]
@@ -603,8 +604,10 @@ class vmfContactLightningModule(pl.LightningModule):
                                  grasp_width_th, 
                                  graspness_th, 
                                  pcd_from_prompt)
-        if True:
-            self.grasp_buffer.vis_grasps_curr()
+        if not valid_grasp:
+            print("No valid grasp")
+            return None
+        self.grasp_buffer.vis_grasps(all=True)
         pose_chosen = self.grasp_buffer.get_pose_curr_best(convention=convention, sample_num=sample_num)
         
         print("Chosen pose", pose_chosen)
@@ -620,8 +623,10 @@ class GraspBuffer:
             "cp": [], 
             "cp2": [], 
             "kappa": [], 
-            "graspness": []
-                            }
+            "graspness": []}
+        self.buffer_size = 0
+        
+    def create_vis(self):
         self.vis = o3d.visualization.Visualizer()
         self.vis.create_window()
 
@@ -660,31 +665,33 @@ class GraspBuffer:
             # dist2 = torch.cdist(cp2, pcd_from_prompt)
             filter = filter & (dist.min(1).values < 0.01)
         
+        pcds = pcds * resize + shift
+
         if filter.sum() == 0:
             print("No valid grasp")
             return False
 
         # print(f"Number of grasps: {filter.sum()}")
+        else:
+            cp = cp[filter] * resize + shift
+            cp2 = cp2[filter] * resize + shift
+            mid_pt = (cp2 + cp) / 2
+            
+            baseline = predictions["baseline"][filter]
+            kappa = predictions["kappa"][filter]
+            approach = approach[filter]
+            graspness = graspness[filter]
 
-        pcds = pcds * resize + shift
-        cp = cp[filter] * resize + shift
-        cp2 = cp2[filter] * resize + shift
-        mid_pt = (cp2 + cp) / 2
-        
-        baseline = predictions["baseline"][filter]
-        kappa = predictions["kappa"][filter]
-        approach = approach[filter]
-        graspness = graspness[filter]
+            self.buffer_dict["pcds"].append(pcds)  
+            self.buffer_dict["baselines"].append(baseline)
+            self.buffer_dict["approaches"].append(approach)
+            self.buffer_dict["cp"].append(cp)
+            self.buffer_dict["cp2"].append(cp2)
+            self.buffer_dict["kappa"].append(kappa)
+            self.buffer_dict["graspness"].append(graspness)
 
-        self.buffer_dict["pcds"].append(pcds)  
-        self.buffer_dict["baselines"].append(baseline)
-        self.buffer_dict["approaches"].append(approach)
-        self.buffer_dict["cp"].append(cp)
-        self.buffer_dict["cp2"].append(cp2)
-        self.buffer_dict["kappa"].append(kappa)
-        self.buffer_dict["graspness"].append(graspness)
-
-        return True
+            self.buffer_size += 1
+            return True
   
     def get_pcds_all(self):
         return torch.cat(self.buffer_dict["pcds"], dim=0)
@@ -699,35 +706,12 @@ class GraspBuffer:
         return baselines, approaches, cp, cp2, kappa, graspness
     
     def get_pose_all(self, convention="xzy"):
-        baselines, approaches, cp, cp2, kappa, graspness = self.get_grasps_all()
+        baselines, approaches, cp, cp2, kappa, graspness = self.get_grasp_all()
         poses = rotation_from_contact(baseline=baselines, 
                                       approach=approaches, 
                                       translation=(cp+cp2)/2, 
                                       convention=convention)
         return poses, kappa, graspness
-    
-    def vis_grasps_all(self):
-        if len(self.buffer_dict["pcds"]) > 0:
-            _, approaches, cp, cp2, kappa, graspness = self.get_grasp_all()
-            pcds = self.get_pcds_all()
-            print(f"Number of pcds: {pcds.size(0)}")
-            vis_list = vis_grasps(
-                        samples=pcds,
-                        cp=cp,
-                        cp2=cp2,
-                        kappa=kappa,
-                        approach=approaches,
-                        score = graspness,
-                    )
-            self.vis.clear_geometries()
-            for geom in vis_list:
-                self.vis.add_geometry(geom)
-            # Update the visualizer
-            self.vis.poll_events()
-            self.vis.update_renderer()
-            
-        else:
-            print("Buffer is empty, no grasp to visualize")
     
     def get_pcds_curr(self):
         return self.buffer_dict["pcds"][-1]
@@ -749,30 +733,54 @@ class GraspBuffer:
                                       convention=convention)
         return poses, kappa, graspness
     
-    def vis_grasps_curr(self):
-        if len(self.buffer_dict["pcds"]) > 0:
-            baseline, approach, cp, cp2, kappa, graspness = self.get_grasp_curr()
-            pcd = self.get_pcds_curr()
-            vis_list = vis_grasps(
-                        samples=pcd,
-                        cp=cp,
-                        cp2=cp2,
-                        kappa=kappa,
-                        approach=approach,
-                        score = graspness,
-                    )
-            self.vis.clear_geometries()
-            for geom in vis_list:
-                self.vis.add_geometry(geom)
-            # Update the visualizer
-            self.vis.poll_events()
-            self.vis.update_renderer()
-        else:
+    def set_view(self):
+        """Set a specific viewpoint."""
+        ctr = self.vis.get_view_control()
+
+        # Set camera parameters
+        ctr.set_zoom(1)  # Zoom factor
+        ctr.set_lookat([-0.74, 0.1, 0.031])  # Look at center
+        ctr.set_front([-1, 0, 1])  # View direction
+        ctr.set_up([0, 0, 1])  # Up vector
+    
+    def vis_grasps(self, all = False):
+
+        if len(self.buffer_dict["pcds"]) == 0:
             print("Buffer is empty, no grasp to visualize")
+            return
+
+        pcd = self.get_pcds_curr()
+        baseline, approach, cp, cp2, kappa, graspness = self.get_grasp_curr()
+        vis_list = vis_grasps(
+                    samples=pcd,
+                    cp=cp,
+                    cp2=cp2,
+                    kappa=kappa,
+                    approach=approach,
+                    score = graspness,
+                )
+            
+        if not hasattr(self, "vis"):
+            self.create_vis()
+
+        if not all:
+            self.vis.clear_geometries()
+
+        for geom in vis_list:
+            self.vis.add_geometry(geom)
+        # Update the visualizer
+        self.set_view()
+        self.vis.poll_events()
+        self.vis.update_renderer()            
 
     def get_pose_curr_best(self, convention="xzy", sort_by="kappa", sample_num=1):
+
+        if len(self.buffer_dict["pcds"]) == 0:
+            print("Buffer is empty, no grasp to choose")
+            return None
         
         poses, kappa, graspness = self.get_pose_curr(convention)
+        
         score = kappa if sort_by == "kappa" else graspness
         
         #sort poses by criterion
