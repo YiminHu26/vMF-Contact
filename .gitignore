@@ -5,3 +5,4 @@ __pycache__
 .venv
 *.ckpt
 logs_slurm/*
+wandb
