@@ -20,7 +20,6 @@ from vmf_contact_main.train import main_module, parse_args_from_yaml
 from cv_bridge import CvBridge
 import os, torch
 import numpy as np
-from vgn.networks import load_network
 import copy
 from tf_transformations import quaternion_matrix, quaternion_from_matrix, translation_from_matrix
 import tf2_geometry_msgs
@@ -28,11 +27,16 @@ from .camera_utils import *
 from math import cos, sin
 #import spatialmath as sm
 from scipy import ndimage
+
+from vgn.detection import VGN
+from vgn.detection_implicit import VGNImplicit
 from vgn.grasp import *
 from vgn.utils.transform import Transform, Rotation
+from vgn.perception import TSDFVolume
+
 # from vgn.utils import ros_utils
 from pathlib import Path
-import enum
+import trimesh
 
 
 current_file_folder = os.path.dirname(os.path.abspath(__file__))
@@ -50,10 +54,8 @@ MOVING_TO_PREGRASP_RETURN = "moving_to_pregrasp2"
 MOVING_TO_CAMERA_READY = "moving_to_camera_ready"
 FAILED = "failed"
 
-O_RESOLUTION = 600
-#O_RESOLUTION = 256
-#O_RESOLUTION = 100
-O_SIZE = 1.0
+O_RESOLUTION = 400
+O_SIZE = 0.3
 O_VOXEL_SIZE = O_SIZE / O_RESOLUTION
 
 class State:
@@ -62,7 +64,7 @@ class State:
 
 class PCDListener(Node):
 
-    def __init__(self, model_type, model_path):
+    def __init__(self):
         super().__init__("pcd_subsriber_node")
         
         # Giga
@@ -126,11 +128,15 @@ class PCDListener(Node):
         self.shutdown = False
         #self.agent = main_module(parse_args_from_yaml(current_file_folder + "/config.yaml"), learning=False)
         model_type = "giga" 
-        model_path = "/home/sheng/GIGA/data/models/giga_packed.pt" 
-        self.agent = load_network(model_path, self.device, model_type=model_type)
-        #print(f"self.agent: {self.agent}")
-
-
+        model_path = "/home/yitian/GIGA/data/models/giga_packed.pt" 
+        self.agent = VGNImplicit(model_path, 
+                                model_type=model_type,
+                                best=True,
+                                qual_th=0.9,
+                                resolution=O_RESOLUTION,
+                                voxel_size=O_VOXEL_SIZE,
+                                out_th=0.1,
+                                visualize=True)
 
         self.movement_finished_flag = threading.Event()
         self.movement_failed_flag = threading.Event()
@@ -220,16 +226,16 @@ class PCDListener(Node):
         img = self.last_image_msg
 
         # transform the point cloud to base_link frame
-        camera= CameraInfo(
-            width=self.image_width, 
-            height=self.image_height, 
+        self.camera= CameraInfo(
+            width=int(self.image_width), 
+            height=int(self.image_height), 
             fx=self.camera_matrix[0, 0], 
             fy=self.camera_matrix[1, 1],
             cx=self.camera_matrix[0, 2], 
             cy=self.camera_matrix[1, 2], 
-            scale=1000.0
+            scale=1.0
         )
-        pcd_from_depth = create_point_cloud_from_depth_image(self.last_depth_msg, camera, organized=True).reshape(-1, 3)
+        pcd_from_depth = create_point_cloud_from_depth_image(self.last_depth_msg, self.camera, organized=True).reshape(-1, 3)
         
         # Look up for the transformation between base_link and the frame_id of the point cloud
         from_frame_rel = "base_link"
@@ -265,70 +271,22 @@ class PCDListener(Node):
             elif user_input == "q":
                 self.shutdown = True
                 break
-    
-    def predict(self, depth: np.ndarray, camTtask_np: np.ndarray, reconstruction: bool = False):
-        assert camTtask_np.shape == (4, 4)
-
-        start_time = time.time()
-        tsdf_volume = create_tsdf(
-            size=O_SIZE,
-            resolution=O_RESOLUTION,
-            depth_imgs=np.expand_dims(depth, axis=0),
-            intrinsic=self.camera_intrinsic,
-            extrinsics=np.expand_dims(camTtask_np, axis=0),
-        )
-
-        state = State(tsdf=tsdf_volume)
-        grasps, scores, toc = self.giga_model(state)
-        inference_time = time.time() - start_time
-
-        if reconstruction:
-            pc_torch = torch.tensor(tsdf_volume.get_grid())
-            pred_mesh, _ = self.generator.generate_mesh({"inputs": pc_torch})
-        else:
-            pred_mesh = None
-        return grasps, scores, inference_time, tsdf_volume.get_cloud(), pred_mesh
+  
   
     def agent_inference(self):
         if self.last_depth_msg is None or self.camera_matrix is None:
             print("Missing depth image or camera info.")
             return None
         
-        print("Depth message stats:", np.min(self.last_depth_msg), np.max(self.last_depth_msg))
-
-        camera = CameraInfo(
-            width=self.image_width, 
-            height=self.image_height, 
-            fx=self.camera_matrix[0, 0], 
-            fy=self.camera_matrix[1, 1],
-            cx=self.camera_matrix[0, 2], 
-            cy=self.camera_matrix[1, 2], 
-            scale=1000.0
-        )
-
-        depth_imgs = np.expand_dims(self.last_depth_msg, axis=0)
-
+        depth_imgs = np.expand_dims(self.last_depth_msg, axis=0).astype(np.float32) / 1000.0
+        
         extrinsics = self.get_extrinsics()
-        #print(f"Extrinsics: {extrinsics}")
-        print("Camera matrix:", self.camera_matrix)
-        print("Extrinsics:", extrinsics)
 
-        tsdf_volume = create_tsdf(O_SIZE, O_RESOLUTION, depth_imgs, camera, extrinsics)
-
-        tsdf_grid = tsdf_volume.get_grid()
-        print(tsdf_grid.max())
-        pcd = tsdf_volume.get_cloud()
-
-        o3d.visualization.draw_geometries([pcd])
-
-        print(self.agent)
+        tsdf_volume = create_tsdf(O_SIZE, O_RESOLUTION, depth_imgs, self.camera, extrinsics)
+        state = State(tsdf=tsdf_volume)
 
         # Perform inference
-        grasps, scores, inference_time, tsdf_pc, pred_mesh = self.predict(
-            self.depth, self.camTtask.A, reconstruction=False
-        )
-        #best_grasp = sm.SE3.Rt(R=grasps[0].pose.rotation.as_matrix(), t=grasps[0].pose.translation)
-        #wTgrasp = self.wTtask * best_grasp
+        grasps, scores, toc, composed_scene = self.agent(state)
 
         print(f"Number of grasps: {len(grasps)}")
         print(f"Top grasp score: {max(scores) if scores else 'N/A'}")
@@ -350,9 +308,10 @@ class PCDListener(Node):
 
     def get_extrinsics(self):
         extrinsics = np.expand_dims(np.eye(4), axis=0)
+        # return extrinsics
 
         t_robot_2_camera: TransformStamped = self.tf_buffer.lookup_transform(
-            "camera_color_optical_frame","base_link", rclpy.time.Time()
+            "base_link","camera_depth_optical_frame", rclpy.time.Time()
         )
         translation = [
             t_robot_2_camera.transform.translation.x,
@@ -769,452 +728,21 @@ class PCDListener(Node):
         command.max_effort = 150.0  # 20 N - 235 N
         self.send_gripper_command(command)
 
-'''
-    def send_and_wait_for_grasps(self, state):
-
-        points = np.asarray(state.pc.points)
-        msg = ros_utils.to_cloud_msg(points, frame="task")
-        self.cloud_pub.publish(msg)
-
-        self._msg_event.clear()
-        self._current_result = None
-
-        start_time = time.time()
-        while rclpy.ok() and not self._msg_event.is_set():
-            rclpy.spin_once(self, timeout_sec=0.1) 
-
-        elapsed = time.time() - start_time
-
-        if self._current_result is None:
-            grasps, scores = [], []
-        else:
-            grasps, scores = self.to_grasp_list(self._current_result)
-
-        return grasps, scores, elapsed
-'''
-    
-class TSDFVolume():
-    """Integration of multiple depth images using a TSDF."""
-
-    def __init__(self, size, resolution,dynamic_center=False):
-        self.size = size
-        self.resolution = resolution
-        self.voxel_size = self.size / self.resolution
-        self.sdf_trunc = 4 * self.voxel_size
-       # self.dynamic_center = dynamic_center
-        print(f"Voxel size: {self.voxel_size} meters")
-        print(f"SDF truncation distance: {self.sdf_trunc} meters")
-
-
-        self._volume = o3d.pipelines.integration.UniformTSDFVolume(
-            length=self.size,
-            resolution=self.resolution,
-            sdf_trunc=self.sdf_trunc,
-            color_type=o3d.pipelines.integration.TSDFVolumeColorType.NoColor,
-        )
-    
-    def adjust_tsdf_center(self, translation):
-        if self.dynamic_center:
-            print(f"Adjusting TSDF center to camera position: {translation}")
-            self._volume = o3d.pipelines.integration.UniformTSDFVolume(
-                length=self.size,
-                resolution=self.resolution,
-                sdf_trunc=self.sdf_trunc,
-                color_type=o3d.pipelines.integration.TSDFVolumeColorType.NoColor,
-            )
-
-    def integrate(self, depth_img, camera: CameraInfo, extrinsic):
-        depth_img = np.float32(depth_img)
-
-        print(f"Depth image stats before processing: min={np.min(depth_img)}, max={np.max(depth_img)}")
-
-        depth_img = np.clip(depth_img, 0.001, 900.0) 
-        print(f"Processed depth image stats: min={np.min(depth_img)}, max={np.max(depth_img)}")
-
-        color_image = np.zeros_like(depth_img, dtype=np.uint8) 
-        rgbd = o3d.geometry.RGBDImage.create_from_color_and_depth(
-            o3d.geometry.Image(color_image),
-            o3d.geometry.Image(depth_img),
-            depth_scale=1000.0,
-            depth_trunc=1.0,
-            convert_rgb_to_intensity=False,
-        )
-        print(f"RGBD depth image stats: min={np.min(np.asarray(rgbd.depth))}, max={np.max(np.asarray(rgbd.depth))}")
-
-        tsdf_min = -self.size / 2
-        tsdf_max = self.size / 2
-        print(f"TSDF range: x={tsdf_min} to {tsdf_max}, y={tsdf_min} to {tsdf_max}, z={tsdf_min} to {tsdf_max}")
-
-        intrinsic = o3d.camera.PinholeCameraIntrinsic(
-            int(camera.width),
-            int(camera.height), 
-            float(camera.fx), 
-            float(camera.fy),   
-            float(camera.cx),   
-            float(camera.cy),
-        )
-
-        if not isinstance(extrinsic, Transform):
-            raise TypeError(f"Expected extrinsics to be Transform, got {type(extrinsic)}")
-    
-        extrinsics = extrinsic.as_matrix()
-        extrinsics = np.linalg.inv(extrinsics)
-        
-        #extrinsic = np.eye(4)
-        print(f"Transform applied: {extrinsics}")
-
-        self._volume.integrate(rgbd, intrinsic, extrinsics)
-
-        points = self._volume.extract_point_cloud()
-
-    def get_grid(self):
-        """Extract the TSDF grid for further processing."""
-        tsdf_grid = np.zeros((1, self.resolution, self.resolution, self.resolution), dtype=np.float32)
-
-        try:
-            tsdf_vol = np.asarray(self._volume.extract_volume_tsdf()).astype(np.float32)
-            tsdf_vals = np.copy(tsdf_vol[:, 0]).reshape((1, self.resolution, self.resolution, self.resolution))
-            tsdf_weights = np.copy(tsdf_vol[:, 1]).reshape((1, self.resolution, self.resolution, self.resolution))
-
-            tsdf_grid = np.where(
-                (tsdf_weights != 0.0) & (tsdf_vals < 0.98) & (tsdf_vals >= -0.98),
-                (tsdf_vals + 1.0) * 0.5,
-                tsdf_grid,
-            )
-            print("TSDF grid stats: min =", tsdf_grid.min(), ", max =", tsdf_grid.max())
-
-        except Exception as e:
-            print(f"Error extracting TSDF grid: {e}")
-
-        return tsdf_grid
-
-    def get_cloud(self):
-        return self._volume.extract_point_cloud()
-
-def create_tsdf(size, resolution, depth_imgs, camera, extrinsics):
-    #print(f"Extrinsics: {extrinsics}")
+def create_tsdf(size, resolution, depth_imgs, intrinsic, extrinsics):
     tsdf = TSDFVolume(size, resolution)
+    for i in range(depth_imgs.shape[0]):
+        extrinsic = Transform.from_matrix(extrinsics[i])
+        tsdf.integrate(depth_imgs[i], intrinsic, extrinsic)
 
-    for i, depth_img in enumerate(depth_imgs):
-     
-        #normalized_depth = cv2.normalize(depth_img, None, 0, 255, cv2.NORM_MINMAX)
-        #normalized_depth = normalized_depth.astype(np.uint8) 
-
-        #cv2.imshow("Depth Image", normalized_depth)
-        #cv2.waitKey(0)  
-        #cv2.destroyAllWindows()
-        extrinsic = extrinsics[i]
-        #print(f"Original extrinsic[{i}]:\n{extrinsic}")
-
-        if isinstance(extrinsic, np.ndarray) and extrinsic.shape == (4, 4):
-            rotation = extrinsic[:3, :3]
-            translation = extrinsic[:3, 3]
-            extrinsic = Transform(Rotation.from_matrix(rotation), translation)
-        else:
-            raise ValueError(f"Invalid extrinsic format: {type(extrinsic)}, expected 4x4 numpy array.")
-
-        # print(f"Transformed extrinsic[{i}]: Rotation:\n{extrinsic.rotation.as_matrix()}, Translation: {extrinsic.translation}")
-
-        tsdf.integrate(depth_img, camera, extrinsic)
-    print(f"Processing depth image {i}, min: {np.min(depth_img)}, max: {np.max(depth_img)}")
-
+    # visualize the TSDF volume
+    pcd = tsdf.get_cloud()
+    print("Point cloud shape: ", pcd.points)
     return tsdf
-
-
-def camera_on_sphere(origin, radius, theta, phi):
-    eye = np.r_[
-        radius * sin(theta) * cos(phi),
-        radius * sin(theta) * sin(phi),
-        radius * cos(theta),
-    ]
-    target = np.array([0.0, 0.0, 0.0])
-    up = np.array([0.0, 0.0, 1.0])  # this breaks when looking straight down
-    return Transform.look_at(eye, target, up) * origin.inverse()
-
-
-class VGN():
-    """Grasp reasoning from tsdf using VGN"""
-    def __init__(self, model_path, model_type="giga", best=False, force_detection=False, qual_th=0.9, out_th=0.5, visualize=False):
-
-        if model_path is None:
-            current_file_folder = os.path.dirname(os.path.abspath(__file__))
-            model_dir = os.path.join(current_file_folder, "models")
-            model_name = "giga_packed.pt"
-            model_path = os.path.join(model_dir, model_name)
-        
-        #self.net = load_network(model_path, self.device, model_type=model_type)
-        self.net.eval()
-        self.qual_th = qual_th
-        self.best = best
-        self.force_detection = force_detection
-        self.out_th = out_th
-        #self.visualize = visualize
-
-
-    def __call__(self, state, scene_mesh=None, aff_kwargs={}):
-        if isinstance(state.tsdf, np.ndarray):
-            tsdf_vol = state.tsdf
-            voxel_size = 0.3 / self.resolution
-            size = 0.3
-        else:
-            tsdf_vol = state.tsdf.get_grid()
-            voxel_size = state.tsdf.voxel_size
-            size = state.tsdf.size
-
-        tic = time.time()
-        qual_vol, rot_vol, width_vol = predict(tsdf_vol, self.net, self.device)
-
-
-        qual_vol, rot_vol, width_vol = process(tsdf_vol, qual_vol, rot_vol, width_vol, out_th=self.out_th)
-        qual_vol = bound(qual_vol, voxel_size)
-
-        #if self.visualize:
-        #    colored_scene_mesh = visual.affordance_visual(
-        #       qual_vol, rot_vol.transpose(1, 2, 3, 0),
-        #        scene_mesh, size, 40, **aff_kwargs)
-                
-        grasps, scores = select(qual_vol.copy(), rot_vol, width_vol, threshold=self.qual_th, force_detection=self.force_detection, max_filter_size=8)
-        toc = time.time() - tic
-
-        grasps, scores = np.asarray(grasps), np.asarray(scores)
-
-        if len(grasps) > 0:
-            if self.best:
-                p = np.arange(len(grasps))
-            else:
-                p = np.random.permutation(len(grasps))
-
-            grasps = [from_voxel_coordinates(g, voxel_size) for g in grasps[p]]
-            scores = scores[p]
-
-        
-        return grasps, scores, toc
-
-class VGNImplicit(PCDListener):
-    """Similar to class VGN, but allows implicit network to learn coordinates in a more fine-grained manner"""
-    def __init__(self, model_path, model_type="giga", best=False, force_detection=False, qual_th=0.9, out_th=0.5, visualize=False, resolution=100, **kwargs):
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        
-        self.net = load_network(model_path, self.device, model_type=model_type)
-
-        self.qual_th = qual_th
-        self.best = best
-        self.force_detection = force_detection
-        self.out_th = out_th
-        self.tsdf = None
-        #self.visualize = visualize
-        
-        self.resolution = resolution
-        x, y, z = torch.meshgrid(torch.linspace(start=-0.5, end=0.5 - 1.0 / self.resolution, steps=self.resolution), torch.linspace(start=-0.5, end=0.5 - 1.0 / self.resolution, steps=self.resolution), torch.linspace(start=-0.5, end=0.5 - 1.0 / self.resolution, steps=self.resolution))
-        # 1, self.resolution, self.resolution, self.resolution, 3
-        pos = torch.stack((x, y, z), dim=-1).float().unsqueeze(0).to(self.device)
-        self.pos = pos.view(1, self.resolution * self.resolution * self.resolution, 3)
-
-    def __call__(self, tsdf_volume, scene_mesh=None, aff_kwargs={}):
-        if isinstance(tsdf_volume, np.ndarray):
-
-            tsdf_vol = tsdf_volume
-            voxel_size = 0.3 / self.resolution 
-            size = 0.3 
-        else:
-            tsdf_vol = tsdf_volume.get_grid()  
-            voxel_size = tsdf_volume.voxel_size 
-            size = tsdf_volume.size
-
-        tic = time.time()
-        qual_vol, rot_vol, width_vol = predict(tsdf_vol, self.pos, self.net, self.device)
-        qual_vol = qual_vol.reshape((self.resolution, self.resolution, self.resolution))
-        rot_vol = rot_vol.reshape((self.resolution, self.resolution, self.resolution, 4))
-        width_vol = width_vol.reshape((self.resolution, self.resolution, self.resolution))
-
-        #qual_vol, rot_vol, width_vol = process(tsdf_process, qual_vol, rot_vol, width_vol, out_th=self.out_th)
-        qual_vol = bound(qual_vol, voxel_size)
-        #if self.visualize:
-        #    colored_scene_mesh = visual.affordance_visual(qual_vol, rot_vol, scene_mesh, size, self.resolution, **aff_kwargs)
-        grasps, scores = select(qual_vol.copy(), self.pos.view(self.resolution, self.resolution, self.resolution, 3).cpu(), rot_vol, width_vol, threshold=self.qual_th, force_detection=self.force_detection, max_filter_size=8)
-        toc = time.time() - tic
-
-        grasps, scores = np.asarray(grasps), np.asarray(scores)
-
-        new_grasps = []
-        if len(grasps) > 0:
-            if self.best:
-                p = np.arange(len(grasps))
-            else:
-                p = np.random.permutation(len(grasps))
-            for g in grasps[p]:
-                pose = g.pose
-                pose.translation = (pose.translation + 0.5) * size
-                width = g.width * size
-                new_grasps.append(Grasp(pose, width))
-            scores = scores[p]
-        grasps = new_grasps
-
-        return grasps, scores
-
-def predict(tsdf_vol, pos, net, device):
-    assert tsdf_vol.shape == (1, 100, 100, 100)
-
-    # move input to the GPU
-    tsdf_vol = torch.from_numpy(tsdf_vol).to(device)
-
-    # forward pass
-    with torch.no_grad():
-        qual_vol, rot_vol, width_vol = net(tsdf_vol, pos)
-
-    # move output back to the CPU
-    qual_vol = qual_vol.cpu().squeeze().numpy()
-    rot_vol = rot_vol.cpu().squeeze().numpy()
-    width_vol = width_vol.cpu().squeeze().numpy()
-    return qual_vol, rot_vol, width_vol
-
-def bound(qual_vol, voxel_size, limit=[0.02, 0.02, 0.055]):
-    # avoid grasp out of bound [0.02  0.02  0.055]
-    x_lim = int(limit[0] / voxel_size)
-    y_lim = int(limit[1] / voxel_size)
-    z_lim = int(limit[2] / voxel_size)
-    qual_vol[:x_lim] = 0.0
-    qual_vol[-x_lim:] = 0.0
-    qual_vol[:, :y_lim] = 0.0
-    qual_vol[:, -y_lim:] = 0.0
-    qual_vol[:, :, :z_lim] = 0.0
-    return qual_vol
-
-
-
-
-"""
-def process(
-    tsdf_vol,
-    qual_vol,
-    rot_vol,
-    width_vol,
-    gaussian_filter_sigma=1.0,
-    min_width=0.033,
-    max_width=0.233,
-    out_th=0.5
-):
-    tsdf_vol = tsdf_vol.squeeze()
-
-    # smooth quality volume with a Gaussian
-    qual_vol = ndimage.gaussian_filter(
-        qual_vol, sigma=gaussian_filter_sigma, mode="nearest"
-    )
-
-    # mask out voxels too far away from the surface
-    outside_voxels = tsdf_vol > out_th
-    inside_voxels = np.logical_and(1e-3 < tsdf_vol, tsdf_vol < out_th)
-    valid_voxels = ndimage.morphology.binary_dilation(
-        outside_voxels, iterations=2, mask=np.logical_not(inside_voxels)
-    )
-    qual_vol[valid_voxels == False] = 0.0
-
-    # reject voxels with predicted widths that are too small or too large
-    qual_vol[np.logical_or(width_vol < min_width, width_vol > max_width)] = 0.0
-
-    return qual_vol, rot_vol, width_vol
-"""
-
-LOW_TH = 0.5
-
-def select(qual_vol, center_vol,rot_vol, width_vol, threshold=0.90, max_filter_size=4, force_detection=False):
-    """
-    print("Size before reshape:")
-    print("qual_vol shape:", qual_vol.shape)
-    print("rot_vol shape:", rot_vol.shape)
-    print("width_vol shape:", width_vol.shape)
-
-    grid_size = int(round(qual_vol.size ** (1 / 3)))
-    if grid_size ** 3 != qual_vol.size:
-        raise ValueError("Size of qual_vol: {})".format(qual_vol.size))
-    
-    qual_vol = qual_vol.reshape((grid_size, grid_size, grid_size))
-    width_vol = width_vol.reshape((grid_size, grid_size, grid_size))
-
-    rot_vol = rot_vol.reshape((grid_size, grid_size, grid_size, 4))
-
-    print("Size after reshape:")
-    print("qual_vol shape:", qual_vol.shape)
-    print("rot_vol shape:", rot_vol.shape)
-    print("width_vol shape:", width_vol.shape)
-    """
-
-    best_only = False
-    qual_vol[qual_vol < LOW_TH] = 0.0
-    if force_detection and (qual_vol >= threshold).sum() == 0:
-        best_only = True
-    else:
-        # threshold on grasp quality
-        qual_vol[qual_vol < threshold] = 0.0
-
-    # non maximum suppression
-    max_vol = ndimage.maximum_filter(qual_vol, size=max_filter_size)
-    qual_vol = np.where(qual_vol == max_vol, qual_vol, 0.0)
-    mask = np.where(qual_vol, 1.0, 0.0)
-    print("mask shape:", mask.shape)
-
-    # construct grasps
-    grasps, scores = [], []
-    for index in np.argwhere(mask):
-        print("Index:", index)
-        grasp, score = select_index(qual_vol,center_vol, rot_vol, width_vol, index)
-        grasps.append(grasp)
-        scores.append(score)
-
-    sorted_grasps = [grasps[i] for i in reversed(np.argsort(scores))]
-    sorted_scores = [scores[i] for i in reversed(np.argsort(scores))]
-
-    if best_only and len(sorted_grasps) > 0:
-        sorted_grasps = [sorted_grasps[0]]
-        sorted_scores = [sorted_scores[0]]
-
-    return sorted_grasps, sorted_scores
-
-def select_index(qual_vol,center_vol, rot_vol, width_vol, index):
-    #print("index:", index)
-    i, j, k = index
-    score = qual_vol[i, j, k]
-    ori = Rotation.from_quat(rot_vol[i, j, k])
-    pos = center_vol[i, j, k].numpy()
-    width = width_vol[i, j, k]
-    return Grasp(Transform(ori, pos), width), score
-
-
-class Label(enum.IntEnum):
-    FAILURE = 0  # grasp execution failed due to collision or slippage
-    SUCCESS = 1  # object was successfully removed
-
-
-class Grasp():
-    """Grasp parameterized as pose of a 2-finger robot hand.
-    
-    TODO(mbreyer): clarify definition of grasp frame
-    """
-
-    def __init__(self, pose, width):
-        self.pose = pose
-        self.width = width
-
-
-def to_voxel_coordinates(grasp, voxel_size):
-    pose = grasp.pose
-    pose.translation /= voxel_size
-    width = grasp.width / voxel_size
-    return Grasp(pose, width)
-
-
-def from_voxel_coordinates(grasp, voxel_size):
-    pose = grasp.pose
-    pose.translation *= voxel_size
-    width = grasp.width * voxel_size
-    return Grasp(pose, width)
 
 def main(args=None):
     # Boilerplate code.
     rclpy.init(args=args)
-    model_type = "giga_packed.pt" 
-    model_path = "/home/sheng/GIGA/data/models" 
-    pcd_listener = PCDListener(model_type, model_path)
+    pcd_listener = PCDListener()
     try:
         rclpy.spin(pcd_listener)
     except SystemExit:
