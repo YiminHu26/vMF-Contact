@@ -296,8 +296,6 @@ class PCDListener(Node):
         
         print("Depth message stats:", np.min(self.last_depth_msg), np.max(self.last_depth_msg))
 
-        
-
         camera = CameraInfo(
             width=self.image_width, 
             height=self.image_height, 
@@ -829,8 +827,6 @@ class TSDFVolume():
         depth_img = np.float32(depth_img)
 
         print(f"Depth image stats before processing: min={np.min(depth_img)}, max={np.max(depth_img)}")
-        depth_img[depth_img <= 0] = 0.001 
-        print(f"Depth image stats after replacing invalid values: min={np.min(depth_img)}, max={np.max(depth_img)}")
 
         depth_img = np.clip(depth_img, 0.001, 900.0) 
         print(f"Processed depth image stats: min={np.min(depth_img)}, max={np.max(depth_img)}")
@@ -845,12 +841,9 @@ class TSDFVolume():
         )
         print(f"RGBD depth image stats: min={np.min(np.asarray(rgbd.depth))}, max={np.max(np.asarray(rgbd.depth))}")
 
-
         tsdf_min = -self.size / 2
         tsdf_max = self.size / 2
         print(f"TSDF range: x={tsdf_min} to {tsdf_max}, y={tsdf_min} to {tsdf_max}, z={tsdf_min} to {tsdf_max}")
-
-
 
         intrinsic = o3d.camera.PinholeCameraIntrinsic(
             int(camera.width),
@@ -866,15 +859,13 @@ class TSDFVolume():
     
         extrinsics = extrinsic.as_matrix()
         extrinsics = np.linalg.inv(extrinsics)
-
-
-        print(f"Extrinsics translation: {extrinsics[:3, 3]}")
         
         #extrinsic = np.eye(4)
-        print(f"Transform applied: {extrinsic}")
+        print(f"Transform applied: {extrinsics}")
 
         self._volume.integrate(rgbd, intrinsic, extrinsics)
-        print(f"TSDF stats after integration: {self._volume.extract_point_cloud().points}")
+
+        points = self._volume.extract_point_cloud()
 
     def get_grid(self):
         """Extract the TSDF grid for further processing."""
