@@ -20,7 +20,8 @@ setup(
     tests_require=["pytest"],
     entry_points={
         "console_scripts": [
-            "pointcloud_subscriber_node = vmf_contact_main.pointcloud_subscriber_node:main",
+            # "pointcloud_subscriber_node = vmf_contact_main.pointcloud_subscriber_node:main",
+            "pointcloud_subscriber_node_giga = vmf_contact_main.pointcloud_subscriber_node_giga:main",
         ],
     },
 )

@@ -20,22 +20,19 @@ from vmf_contact_main.train import main_module, parse_args_from_yaml
 from cv_bridge import CvBridge
 import os, torch
 import numpy as np
+from vgn.networks import load_network
 import copy
 from tf_transformations import quaternion_matrix, quaternion_from_matrix, translation_from_matrix
 import tf2_geometry_msgs
 from .camera_utils import *
 from math import cos, sin
+#import spatialmath as sm
 from scipy import ndimage
 from vgn.grasp import *
 from vgn.utils.transform import Transform, Rotation
-from vgn.networks import load_network
-from vgn.utils import ros_utils
+# from vgn.utils import ros_utils
 from pathlib import Path
-
 import enum
-
-import sys
-print(f"ROS 2 is using Python interpreter: {sys.executable}")
 
 
 current_file_folder = os.path.dirname(os.path.abspath(__file__))
@@ -53,12 +50,19 @@ MOVING_TO_PREGRASP_RETURN = "moving_to_pregrasp2"
 MOVING_TO_CAMERA_READY = "moving_to_camera_ready"
 FAILED = "failed"
 
+O_RESOLUTION = 600
+#O_RESOLUTION = 256
+#O_RESOLUTION = 100
+O_SIZE = 1.0
+O_VOXEL_SIZE = O_SIZE / O_RESOLUTION
 
-
+class State:
+    def __init__(self, tsdf):
+        self.tsdf = tsdf
 
 class PCDListener(Node):
 
-    def __init__(self, model_type, model_dir):
+    def __init__(self, model_type, model_path):
         super().__init__("pcd_subsriber_node")
         
         # Giga
@@ -116,13 +120,16 @@ class PCDListener(Node):
 
         self.pcd_shift=np.array([-0.86, 0.1, 0.031])
         self.pcd_resize=np.array(1)
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self.last_point_cloud_msg = None
         self.shutdown = False
         #self.agent = main_module(parse_args_from_yaml(current_file_folder + "/config.yaml"), learning=False)
-        model_type = "giga_aff_packed.pt" 
-        model_dir = "/home/sheng/GIGA/data/models" 
-        self.agent.net = self.load_model(model_type,model_dir)
+        model_type = "giga" 
+        model_path = "/home/sheng/GIGA/data/models/giga_packed.pt" 
+        self.agent = load_network(model_path, self.device, model_type=model_type)
+        #print(f"self.agent: {self.agent}")
+
 
 
         self.movement_finished_flag = threading.Event()
@@ -162,23 +169,8 @@ class PCDListener(Node):
 
         self.user_input_thread = threading.Thread(target=self.handle_user_input)
         self.user_input_thread.start()
-    
-    def load_model(self, model_type, model_dir):
 
-        model_name = f"giga_{model_type}.pt"
-        model_path = Path(model_dir) / model_name
-
-        
-        self.get_logger().info(f"Load_model: {model_path}")
-        return VGNImplicit(
-            model_path=model_path,
-            model_type="giga",
-            best=True,
-            qual_th=0.75,
-            force_detection=True,
-            out_th=0.1,
-            select_top=False,
-        )
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     def listener_callback_pcd(self, msg: sensor_msgs.PointCloud2):
         """Callback function for the subscriber of the point cloud topic."""
@@ -267,22 +259,44 @@ class PCDListener(Node):
 
                 grasp = self.agent_inference() 
                 if grasp is not None:
-                    self.execute_grasp_vgn(grasp)
+                    self.execute_grasp(grasp)
                 else:
                     print("No grasp pose detected, please try again.")
             elif user_input == "q":
                 self.shutdown = True
                 break
     
+    def predict(self, depth: np.ndarray, camTtask_np: np.ndarray, reconstruction: bool = False):
+        assert camTtask_np.shape == (4, 4)
+
+        start_time = time.time()
+        tsdf_volume = create_tsdf(
+            size=O_SIZE,
+            resolution=O_RESOLUTION,
+            depth_imgs=np.expand_dims(depth, axis=0),
+            intrinsic=self.camera_intrinsic,
+            extrinsics=np.expand_dims(camTtask_np, axis=0),
+        )
+
+        state = State(tsdf=tsdf_volume)
+        grasps, scores, toc = self.giga_model(state)
+        inference_time = time.time() - start_time
+
+        if reconstruction:
+            pc_torch = torch.tensor(tsdf_volume.get_grid())
+            pred_mesh, _ = self.generator.generate_mesh({"inputs": pc_torch})
+        else:
+            pred_mesh = None
+        return grasps, scores, inference_time, tsdf_volume.get_cloud(), pred_mesh
   
     def agent_inference(self):
         if self.last_depth_msg is None or self.camera_matrix is None:
             print("Missing depth image or camera info.")
             return None
         
-        O_RESOLUTION = 40
-        O_SIZE = 0.3
-        O_VOXEL_SIZE = O_SIZE / O_RESOLUTION
+        print("Depth message stats:", np.min(self.last_depth_msg), np.max(self.last_depth_msg))
+
+        
 
         camera = CameraInfo(
             width=self.image_width, 
@@ -295,21 +309,74 @@ class PCDListener(Node):
         )
 
         depth_imgs = np.expand_dims(self.last_depth_msg, axis=0)
-        extrinsics = np.expand_dims(np.eye(4), axis=0)
-        print(f"Extrinsics: {extrinsics}")
+
+        extrinsics = self.get_extrinsics()
+        #print(f"Extrinsics: {extrinsics}")
+        print("Camera matrix:", self.camera_matrix)
+        print("Extrinsics:", extrinsics)
 
         tsdf_volume = create_tsdf(O_SIZE, O_RESOLUTION, depth_imgs, camera, extrinsics)
+
         tsdf_grid = tsdf_volume.get_grid()
+        print(tsdf_grid.max())
+        pcd = tsdf_volume.get_cloud()
 
-        qual_vol, rot_vol, width_vol = predict(tsdf_grid, self.agent.net, self.agent.device)
+        o3d.visualization.draw_geometries([pcd])
 
-        grasps, scores = select(qual_vol.copy(), rot_vol, width_vol, threshold=self.agent.qual_th)
-        if len(grasps) == 0:
-            print("No grasp found by VGN.")
-            return None
-        chosen_grasp = grasps[0]
-        print("Chosen grasp:", chosen_grasp)
-        return chosen_grasp
+        print(self.agent)
+
+        # Perform inference
+        grasps, scores, inference_time, tsdf_pc, pred_mesh = self.predict(
+            self.depth, self.camTtask.A, reconstruction=False
+        )
+        #best_grasp = sm.SE3.Rt(R=grasps[0].pose.rotation.as_matrix(), t=grasps[0].pose.translation)
+        #wTgrasp = self.wTtask * best_grasp
+
+        print(f"Number of grasps: {len(grasps)}")
+        print(f"Top grasp score: {max(scores) if scores else 'N/A'}")
+
+        return grasps, scores
+    
+    def print_grasp_details(self, grasp):
+        print("Grasp Detailed Info:")
+        print("  Width: ", grasp.width)
+        if hasattr(grasp.pose, 'translation'):
+            print("  Translation: ", grasp.pose.translation)
+        else:
+            print("  Translation: N/A")
+        if hasattr(grasp.pose, 'rotation'):
+            print("  Rotation: ", grasp.pose.rotation)
+        else:
+            print("  Rotation: N/A")
+
+
+    def get_extrinsics(self):
+        extrinsics = np.expand_dims(np.eye(4), axis=0)
+
+        t_robot_2_camera: TransformStamped = self.tf_buffer.lookup_transform(
+            "camera_color_optical_frame","base_link", rclpy.time.Time()
+        )
+        translation = [
+            t_robot_2_camera.transform.translation.x,
+            t_robot_2_camera.transform.translation.y,
+            t_robot_2_camera.transform.translation.z,
+        ]
+
+        rotation = [
+            t_robot_2_camera.transform.rotation.x,
+            t_robot_2_camera.transform.rotation.y,
+            t_robot_2_camera.transform.rotation.z,
+            t_robot_2_camera.transform.rotation.w,
+        ]
+
+        # Convert quaternion to rotation matrix
+        rotation_matrix = quaternion_matrix(rotation)[:3, :3]
+
+        # Construct the transformation matrix
+        extrinsics[:, :3, :3] = rotation_matrix
+        extrinsics[:, :3, 3] = translation
+
+        return  extrinsics
 
     
     def change_view(self, pose_base_link_2_camera, elevation=0, azimuth=0):
@@ -371,153 +438,178 @@ class PCDListener(Node):
 
             elif state_machine_state == FAILED:
                 self.get_logger().info("State machine failed")
+    
+    def execute_grasp(self, pose):
 
-    def execute_grasp_vgn(self, best_grasp: Grasp):
-        rot = best_grasp.pose.orientation
-        trans = best_grasp.pose.translation
+        self.get_logger().info("Sending goal now...")
+        grasp_pose = pose_stamped_from_pose(pose, "base_link")
 
-        qx, qy, qz, qw = rot.as_quat()
-        grasp_pose_stamped = PoseStamped()
-        grasp_pose_stamped.header.frame_id = "world"  
-        grasp_pose_stamped.pose.position.x = float(trans[0])
-        grasp_pose_stamped.pose.position.y = float(trans[1])
-        grasp_pose_stamped.pose.position.z = float(trans[2])
-        grasp_pose_stamped.pose.orientation.x = float(qx)
-        grasp_pose_stamped.pose.orientation.y = float(qy)
-        grasp_pose_stamped.pose.orientation.z = float(qz)
-        grasp_pose_stamped.pose.orientation.w = float(qw)
+        self.publish_new_frame("grasp_before", grasp_pose)
 
-        self.publish_new_frame("vgn_grasp_pose_raw", grasp_pose_stamped)
-        self.get_logger().info(f"[VGN] Got grasp pose in 'world': "
-                           f"{grasp_pose_stamped.pose.position}, "
-                           f"quaternion=({qx}, {qy}, {qz}, {qw})")
-        
+        grasp_pose2 = copy.deepcopy(grasp_pose)
+
         try:
-            t_world_to_base = self.tf_buffer.lookup_transform(
-            "base_link",
-            "world",     
-            rclpy.time.Time()
-        )
-            grasp_pose_in_base = tf2_geometry_msgs.do_transform_pose(
-            grasp_pose_stamped, t_world_to_base
-        )
-            grasp_pose_in_base.header.frame_id = "base_link"
+            t_world_2_base_link = self.tf_buffer.lookup_transform(
+                "world", "base_link", rclpy.time.Time()
+            )
+
+            # transform posestamped from base_link to world using t_world_2_base_link
+            grasp_pose2.pose = tf2_geometry_msgs.do_transform_pose(grasp_pose.pose, t_world_2_base_link)
+            grasp_pose2.header.frame_id = "world"
+
+            print("Grasp pose in world frame: ", grasp_pose2.pose.position)
+            print("Grasp orientation in world frame: ", grasp_pose2.pose.orientation)
+
         except TransformException as ex:
-            self.get_logger().error(f"Failed to transform world->base_link: {ex}")
+            self.get_logger().info(
+                f"Could not transform pose from base_link to world: {ex}"
+            )
             return
         
-        self.publish_new_frame("vgn_grasp_pose_in_base", grasp_pose_in_base)
-        pre_grasp_pose_in_base = self.create_pregrasp_pose(grasp_pose_in_base)
-        self.publish_new_frame("vgn_pregrasp_pose_in_base", pre_grasp_pose_in_base)
+        pregrasp_pose = self.create_pregrasp_pose(copy.deepcopy(grasp_pose2))
 
-        user_input = input("Press 'c' to continue with VGN grasp or any other key to quit: ")
-        if user_input.lower() != 'c':
-            self.get_logger().info("User aborted VGN grasp.")
-            return
-        self.stop_event.clear()
-        self.movement_failed_flag.clear()
-        self.movement_finished_flag.clear()
-        state_machine_state = IDLE
-        while True:
-            if state_machine_state == IDLE:
-                self.send_goal(pre_grasp_pose_in_base)
-                state_machine_state = MOVING_TO_PREGRASP
-                self.get_logger().info("[VGN] State -> MOVING_TO_PREGRASP")
+        self.publish_new_frame("grasp_after", grasp_pose2)
+        self.publish_new_frame("pregrasp", pregrasp_pose)
+
+        print("Grasp pose frame ", grasp_pose2.header.frame_id)
+        print("Pregrasp frame ", pregrasp_pose.header.frame_id)
+        
+        # ask if the user wants to continue
+        user_input = input("Press 'c' to continue or any other key to quit: ")
+
+        if user_input.lower() == 'c':
+
+            self.stop_event.clear()
+            self.movement_failed_flag.clear()
+            self.movement_finished_flag.clear()
+            state_machine_state = IDLE
             
-            elif state_machine_state == MOVING_TO_PREGRASP:
-                if self.movement_finished_flag.is_set():
-                    self.movement_finished_flag.clear()
+            while True:
+                if state_machine_state == IDLE:
+                    # Send the goal to move to the pregrasp pose
+                    self.send_goal(pregrasp_pose)
+                    # Start the state machine
+                    state_machine_state = MOVING_TO_PREGRASP
+                    self.get_logger().info("StateMachine switched to MOVING_TO_PREGRASP")
+                    # Create a thread to handle the input
+                    self.cancel_thread = threading.Thread(target=self.get_input)
+                    self.cancel_thread.start()
 
-                    self.send_goal(grasp_pose_in_base)
-                    state_machine_state = MOVING_TO_GRASP
-                    self.get_logger().info("[VGN] State -> MOVING_TO_GRASP")
-                elif self.movement_failed_flag.is_set():
-                    self.movement_failed_flag.clear()
-                    state_machine_state = FAILED
-                    self.get_logger().info("[VGN] State -> FAILED")
+                elif state_machine_state == MOVING_TO_PREGRASP:
+                    if self.stop_event.is_set():
+                        self.stop_event.clear()
+                        self.get_logger().info("Goal cancelled")
+                        self.send_goal(self.camera_ready_pose)
+                        state_machine_state = MOVING_TO_CAMERA_READY
+                        self.get_logger().info("StateMachine switched to MOVING_TO_CAMERA_READY")
+                    # Wait for the action server to finish
+                    elif self.movement_finished_flag.is_set():
+                        self.movement_finished_flag.clear()
+                        # Wait for manual grasp evaluation
+                        time.sleep(2)
+                        if not self.stop_event.is_set():
+                            self.send_goal(grasp_pose2)
+                            # Start the state machine
+                            state_machine_state = MOVING_TO_GRASP
+                            self.get_logger().info("StateMachine switched to MOVING_TO_GRASP")
+                            time.sleep(0.1)
+                    elif self.movement_failed_flag.is_set():
+                        self.movement_failed_flag.clear()
+                        state_machine_state = FAILED
+                        self.get_logger().info("StateMachine switched to FAILED")
+                        
+                elif state_machine_state == MOVING_TO_GRASP:
+                    # Wait for the action server to finish
+                    if self.movement_finished_flag.is_set():
+                        self.movement_finished_flag.clear()
+                        time.sleep(2)
+                        if not self.stop_event.is_set():
+                            # Close the gripper
+                            self.close_gripper()
+                            state_machine_state = GRASPING
+                            self.get_logger().info("StateMachine switched to GRASPING")
+                        else:
+                            self.stop_event.clear()
+                            self.get_logger().info("Goal cancelled")
+                            self.send_goal(self.camera_ready_pose)
+                            state_machine_state = MOVING_TO_CAMERA_READY
+                            self.get_logger().info("StateMachine switched to MOVING_TO_CAMERA_READY")
+                    elif self.movement_failed_flag.is_set():
+                        self.movement_failed_flag.clear()
+                        state_machine_state = FAILED
+                        self.get_logger().info("StateMachine switched to FAILED")
 
-            elif state_machine_state == MOVING_TO_GRASP:
-                if self.movement_finished_flag.is_set():
-                    self.movement_finished_flag.clear()
-                    self.close_gripper()
-                    state_machine_state = GRASPING
-                    self.get_logger().info("[VGN] State -> GRASPING")
-                elif self.movement_failed_flag.is_set():
-                    self.movement_failed_flag.clear()
-                    state_machine_state = FAILED
-                    self.get_logger().info("[VGN] State -> FAILED")
-
-            elif state_machine_state == GRASPING:
-                if self.gripper_movement_finished_flag.is_set():
-                    self.gripper_movement_finished_flag.clear()
-
-                    lifted_pose_in_base = self.transform_pose_z(
-                        copy.deepcopy(grasp_pose_in_base), z_offset=-0.15
-                    )
-                    self.send_goal(lifted_pose_in_base)
-                    state_machine_state = MOVING_TO_PREGRASP_RETURN
-                    self.get_logger().info("[VGN] State -> MOVING_TO_PREGRASP_RETURN")
-                elif self.gripper_movement_failed_flag.is_set():
-                    self.gripper_movement_failed_flag.clear()
-                    state_machine_state = FAILED
-                    self.get_logger().info("[VGN] State -> FAILED")
-            
-            elif state_machine_state == MOVING_TO_PREGRASP_RETURN:
-                if self.movement_finished_flag.is_set():
-                    self.movement_finished_flag.clear()
-
-                    self.send_goal(self.drop_off_pose) 
-                    state_machine_state = MOVING_TO_DROP_OFF
-                    self.get_logger().info("[VGN] State -> MOVING_TO_DROP_OFF")
-                elif self.movement_failed_flag.is_set():
-                    self.movement_failed_flag.clear()
-                    state_machine_state = FAILED
-                    self.get_logger().info("[VGN] State -> FAILED")
-
-            elif state_machine_state == MOVING_TO_DROP_OFF:
-                if self.movement_finished_flag.is_set():
-                    self.movement_finished_flag.clear()
-
-                    self.open_gripper()
-                    state_machine_state = RELEASEING
-                    self.get_logger().info("[VGN] State -> RELEASING")
-                elif self.movement_failed_flag.is_set():
-                    self.movement_failed_flag.clear()
-                    state_machine_state = FAILED
-                    self.get_logger().info("[VGN] State -> FAILED")
-
-            elif state_machine_state == RELEASEING:
-                if self.gripper_movement_finished_flag.is_set():
-                    self.gripper_movement_finished_flag.clear()
-                    self.send_goal(self.camera_ready_pose)
-                    state_machine_state = MOVING_TO_CAMERA_READY
-                    self.get_logger().info("[VGN] State -> MOVING_TO_CAMERA_READY")
-                elif self.gripper_movement_failed_flag.is_set():
-                    self.gripper_movement_failed_flag.clear()
-                    state_machine_state = FAILED
-                    self.get_logger().info("[VGN] State -> FAILED")
-
-            elif state_machine_state == MOVING_TO_CAMERA_READY:
-                if self.movement_finished_flag.is_set():
-                    self.movement_finished_flag.clear()
-
-                    state_machine_state = IDLE
-                    self.get_logger().info("[VGN] Grasp cycle finished!")
+                elif state_machine_state == GRASPING:
+                    # Wait for the gripper to finish
+                    if self.gripper_movement_finished_flag.is_set():
+                        self.gripper_movement_finished_flag.clear()
+                        # Before gripper moves away, wait for 2 seconds
+                        time.sleep(0.25)
+                        # Send the goal to move to the pregrasp pose
+                        self.send_goal(self.transform_pose_z(copy.deepcopy(grasp_pose2), z_offset=-0.15))
+                        state_machine_state = MOVING_TO_PREGRASP_RETURN
+                        self.get_logger().info("StateMachine switched to MOVING_TO_PREGRASP_RETURN")
+                        time.sleep(1)
+                    if self.gripper_movement_failed_flag.is_set():
+                        self.gripper_movement_failed_flag.clear()
+                        state_machine_state = FAILED
+                        
+                
+                elif state_machine_state == MOVING_TO_PREGRASP_RETURN:
+                    # Wait for the action server to finish
+                    if self.movement_finished_flag.is_set():
+                        self.movement_finished_flag.clear()
+                        # Send the goal to move to the drop off pose
+                        self.send_goal(self.drop_off_pose)
+                        state_machine_state = MOVING_TO_DROP_OFF
+                        self.get_logger().info("StateMachine switched to MOVING_TO_DROP_OFF")
+                    if self.movement_failed_flag.is_set():
+                        self.movement_failed_flag.clear()
+                        state_machine_state = FAILED
+                        self.get_logger().info("StateMachine switched to FAILED")
+                
+                elif state_machine_state == MOVING_TO_DROP_OFF:
+                    # Wait for the action server to finish
+                    if self.movement_finished_flag.is_set():
+                        self.movement_finished_flag.clear()
+                        # Open the gripper
+                        self.open_gripper()
+                        state_machine_state = RELEASEING
+                        self.get_logger().info("StateMachine switched to RELEASEING")
+                    if self.movement_failed_flag.is_set():
+                        self.movement_failed_flag.clear()
+                        state_machine_state = FAILED
+                        self.get_logger().info("StateMachine switched to FAILED")
+                
+                elif state_machine_state == RELEASEING:
+                    # Wait for the gripper to finish
+                    if self.gripper_movement_finished_flag.is_set():
+                        self.gripper_movement_finished_flag.clear()
+                        # Send the goal to move to the camera ready pose
+                        self.send_goal(self.camera_ready_pose)
+                        state_machine_state = MOVING_TO_CAMERA_READY
+                        self.get_logger().info("StateMachine switched to MOVING_TO_CAMERA_READY")
+                    if self.gripper_movement_failed_flag.is_set():
+                        self.gripper_movement_failed_flag.clear()
+                        state_machine_state = FAILED
+                        self.get_logger().info("StateMachine switched to FAILED")
+                
+                elif state_machine_state == MOVING_TO_CAMERA_READY:
+                    # Wait for the action server to finish
+                    if self.movement_finished_flag.is_set():
+                        self.movement_finished_flag.clear()
+                        state_machine_state = IDLE
+                        self.get_logger().info("State machine finished")
+                        break
+                    if self.movement_failed_flag.is_set():
+                        self.movement_failed_flag.clear()
+                        state_machine_state = FAILED
+                        self.get_logger().info("StateMachine switched to FAILED")
+                
+                elif state_machine_state == FAILED:
+                    self.get_logger().info("State machine failed")
                     break
-                elif self.movement_failed_flag.is_set():
-                    self.movement_failed_flag.clear()
-                    state_machine_state = FAILED
-                    self.get_logger().info("[VGN] State -> FAILED")
 
-            elif state_machine_state == FAILED:
-                self.get_logger().warning("[VGN] State machine failed. Aborting.")
-                break
-
-            if self.stop_event.is_set():
-                self.get_logger().info("[VGN] Grasp canceled by user/event.")
-            
-                self.stop_event.clear()
-                break
 
     def get_input(self):
         try:
@@ -608,7 +700,6 @@ class PCDListener(Node):
         if not self.goal_handle.accepted:
             self.get_logger().info("Goal rejected")
             return
-
         self.get_logger().info("Goal accepted")
 
         self._get_result_future = self.goal_handle.get_result_async()
@@ -621,6 +712,7 @@ class PCDListener(Node):
             self.movement_finished_flag.set()
         else:
             self.movement_failed_flag.set()
+    
 
     def robot_feedback_callback(self, feedback_msg):
         feedback = feedback_msg.feedback
@@ -679,6 +771,7 @@ class PCDListener(Node):
         command.max_effort = 150.0  # 20 N - 235 N
         self.send_gripper_command(command)
 
+'''
     def send_and_wait_for_grasps(self, state):
 
         points = np.asarray(state.pc.points)
@@ -700,16 +793,20 @@ class PCDListener(Node):
             grasps, scores = self.to_grasp_list(self._current_result)
 
         return grasps, scores, elapsed
-
+'''
     
 class TSDFVolume():
     """Integration of multiple depth images using a TSDF."""
 
-    def __init__(self, size, resolution):
+    def __init__(self, size, resolution,dynamic_center=False):
         self.size = size
         self.resolution = resolution
         self.voxel_size = self.size / self.resolution
         self.sdf_trunc = 4 * self.voxel_size
+       # self.dynamic_center = dynamic_center
+        print(f"Voxel size: {self.voxel_size} meters")
+        print(f"SDF truncation distance: {self.sdf_trunc} meters")
+
 
         self._volume = o3d.pipelines.integration.UniformTSDFVolume(
             length=self.size,
@@ -717,63 +814,106 @@ class TSDFVolume():
             sdf_trunc=self.sdf_trunc,
             color_type=o3d.pipelines.integration.TSDFVolumeColorType.NoColor,
         )
+    
+    def adjust_tsdf_center(self, translation):
+        if self.dynamic_center:
+            print(f"Adjusting TSDF center to camera position: {translation}")
+            self._volume = o3d.pipelines.integration.UniformTSDFVolume(
+                length=self.size,
+                resolution=self.resolution,
+                sdf_trunc=self.sdf_trunc,
+                color_type=o3d.pipelines.integration.TSDFVolumeColorType.NoColor,
+            )
 
     def integrate(self, depth_img, camera: CameraInfo, extrinsic):
-        """
-        Args:
-            depth_img: The depth image.
-            intrinsic: The intrinsic parameters of a pinhole camera model.
-            extrinsics: The transform from the TSDF to camera coordinates, T_eye_task.
-        """
+        depth_img = np.float32(depth_img)
+
+        print(f"Depth image stats before processing: min={np.min(depth_img)}, max={np.max(depth_img)}")
+        depth_img[depth_img <= 0] = 0.001 
+        print(f"Depth image stats after replacing invalid values: min={np.min(depth_img)}, max={np.max(depth_img)}")
+
+        depth_img = np.clip(depth_img, 0.001, 900.0) 
+        print(f"Processed depth image stats: min={np.min(depth_img)}, max={np.max(depth_img)}")
+
+        color_image = np.zeros_like(depth_img, dtype=np.uint8) 
         rgbd = o3d.geometry.RGBDImage.create_from_color_and_depth(
-            o3d.geometry.Image(np.empty_like(depth_img)),
+            o3d.geometry.Image(color_image),
             o3d.geometry.Image(depth_img),
-            depth_scale=1.0,
-            depth_trunc=2.0,
+            depth_scale=1000.0,
+            depth_trunc=1.0,
             convert_rgb_to_intensity=False,
         )
+        print(f"RGBD depth image stats: min={np.min(np.asarray(rgbd.depth))}, max={np.max(np.asarray(rgbd.depth))}")
+
+
+        tsdf_min = -self.size / 2
+        tsdf_max = self.size / 2
+        print(f"TSDF range: x={tsdf_min} to {tsdf_max}, y={tsdf_min} to {tsdf_max}, z={tsdf_min} to {tsdf_max}")
+
+
 
         intrinsic = o3d.camera.PinholeCameraIntrinsic(
-            int(camera.width), 
+            int(camera.width),
             int(camera.height), 
-            float(camera.fx),   
+            float(camera.fx), 
             float(camera.fy),   
             float(camera.cx),   
             float(camera.cy),
         )
+
         if not isinstance(extrinsic, Transform):
-            raise TypeError(f"Expected extrinsic to be Transform, got {type(extrinsic)}")
+            raise TypeError(f"Expected extrinsics to be Transform, got {type(extrinsic)}")
     
+        extrinsics = extrinsic.as_matrix()
+        extrinsics = np.linalg.inv(extrinsics)
 
-        extrinsic = extrinsic.as_matrix()
-        #print(f"Integrating with extrinsic: Rotation:\n{extrinsic.rotation.as_matrix()}, Translation: {extrinsic.translation}")
 
-        self._volume.integrate(rgbd, intrinsic, extrinsic)
+        print(f"Extrinsics translation: {extrinsics[:3, 3]}")
+        
+        #extrinsic = np.eye(4)
+        print(f"Transform applied: {extrinsic}")
+
+        self._volume.integrate(rgbd, intrinsic, extrinsics)
+        print(f"TSDF stats after integration: {self._volume.extract_point_cloud().points}")
 
     def get_grid(self):
-        shape = (1, self.resolution, self.resolution, self.resolution)
-        tsdf_grid = np.zeros(shape, dtype=np.float32)
-        tsdf_vol = np.asarray(self._volume.extract_volume_tsdf()).astype(np.float32)
-        tsdf_vals = np.copy(tsdf_vol[:, 0]).reshape(shape)
-        tsdf_weights = np.copy(tsdf_vol[:, 1]).reshape(shape)
-        tsdf_grid = np.where(
-            (tsdf_weights != 0.0) & (tsdf_vals < 0.98) & (tsdf_vals >= -0.98),
-            (tsdf_vals + 1.0) * 0.5,
-            tsdf_grid,
-        )
+        """Extract the TSDF grid for further processing."""
+        tsdf_grid = np.zeros((1, self.resolution, self.resolution, self.resolution), dtype=np.float32)
+
+        try:
+            tsdf_vol = np.asarray(self._volume.extract_volume_tsdf()).astype(np.float32)
+            tsdf_vals = np.copy(tsdf_vol[:, 0]).reshape((1, self.resolution, self.resolution, self.resolution))
+            tsdf_weights = np.copy(tsdf_vol[:, 1]).reshape((1, self.resolution, self.resolution, self.resolution))
+
+            tsdf_grid = np.where(
+                (tsdf_weights != 0.0) & (tsdf_vals < 0.98) & (tsdf_vals >= -0.98),
+                (tsdf_vals + 1.0) * 0.5,
+                tsdf_grid,
+            )
+            print("TSDF grid stats: min =", tsdf_grid.min(), ", max =", tsdf_grid.max())
+
+        except Exception as e:
+            print(f"Error extracting TSDF grid: {e}")
+
         return tsdf_grid
 
     def get_cloud(self):
         return self._volume.extract_point_cloud()
 
-
 def create_tsdf(size, resolution, depth_imgs, camera, extrinsics):
-    print(f"Extrinsics: {extrinsics}")
+    #print(f"Extrinsics: {extrinsics}")
     tsdf = TSDFVolume(size, resolution)
 
     for i, depth_img in enumerate(depth_imgs):
+     
+        #normalized_depth = cv2.normalize(depth_img, None, 0, 255, cv2.NORM_MINMAX)
+        #normalized_depth = normalized_depth.astype(np.uint8) 
+
+        #cv2.imshow("Depth Image", normalized_depth)
+        #cv2.waitKey(0)  
+        #cv2.destroyAllWindows()
         extrinsic = extrinsics[i]
-        print(f"Original extrinsic[{i}]:\n{extrinsic}")
+        #print(f"Original extrinsic[{i}]:\n{extrinsic}")
 
         if isinstance(extrinsic, np.ndarray) and extrinsic.shape == (4, 4):
             rotation = extrinsic[:3, :3]
@@ -782,10 +922,13 @@ def create_tsdf(size, resolution, depth_imgs, camera, extrinsics):
         else:
             raise ValueError(f"Invalid extrinsic format: {type(extrinsic)}, expected 4x4 numpy array.")
 
-        print(f"Transformed extrinsic[{i}]: Rotation:\n{extrinsic.rotation.as_matrix()}, Translation: {extrinsic.translation}")
+        # print(f"Transformed extrinsic[{i}]: Rotation:\n{extrinsic.rotation.as_matrix()}, Translation: {extrinsic.translation}")
 
         tsdf.integrate(depth_img, camera, extrinsic)
+    print(f"Processing depth image {i}, min: {np.min(depth_img)}, max: {np.max(depth_img)}")
+
     return tsdf
+
 
 def camera_on_sphere(origin, radius, theta, phi):
     eye = np.r_[
@@ -801,15 +944,14 @@ def camera_on_sphere(origin, radius, theta, phi):
 class VGN():
     """Grasp reasoning from tsdf using VGN"""
     def __init__(self, model_path, model_type="giga", best=False, force_detection=False, qual_th=0.9, out_th=0.5, visualize=False):
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         if model_path is None:
             current_file_folder = os.path.dirname(os.path.abspath(__file__))
             model_dir = os.path.join(current_file_folder, "models")
-            model_name = "giga_aff_packed.pt"
+            model_name = "giga_packed.pt"
             model_path = os.path.join(model_dir, model_name)
         
-        self.net = load_network(model_path, self.device, model_type=model_type)
+        #self.net = load_network(model_path, self.device, model_type=model_type)
         self.net.eval()
         self.qual_th = qual_th
         self.best = best
@@ -821,7 +963,7 @@ class VGN():
     def __call__(self, state, scene_mesh=None, aff_kwargs={}):
         if isinstance(state.tsdf, np.ndarray):
             tsdf_vol = state.tsdf
-            voxel_size = 0.3 / 40
+            voxel_size = 0.3 / self.resolution
             size = 0.3
         else:
             tsdf_vol = state.tsdf.get_grid()
@@ -857,22 +999,18 @@ class VGN():
         
         return grasps, scores, toc
 
-class VGNImplicit():
+class VGNImplicit(PCDListener):
     """Similar to class VGN, but allows implicit network to learn coordinates in a more fine-grained manner"""
-    def __init__(self, model_path, model_type="giga", best=False, force_detection=False, qual_th=0.9, out_th=0.5, visualize=False, resolution=40, **kwargs):
+    def __init__(self, model_path, model_type="giga", best=False, force_detection=False, qual_th=0.9, out_th=0.5, visualize=False, resolution=100, **kwargs):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-        if model_path is None:
-            current_file_folder = os.path.dirname(os.path.abspath(__file__))
-            model_dir = os.path.join(current_file_folder, "models")
-            model_name = "giga_aff_packed.pt"
-            model_path = os.path.join(model_dir, model_name)
         
-        self.net = load_network(model_path, model_type)
+        self.net = load_network(model_path, self.device, model_type=model_type)
+
         self.qual_th = qual_th
         self.best = best
         self.force_detection = force_detection
         self.out_th = out_th
+        self.tsdf = None
         #self.visualize = visualize
         
         self.resolution = resolution
@@ -881,21 +1019,16 @@ class VGNImplicit():
         pos = torch.stack((x, y, z), dim=-1).float().unsqueeze(0).to(self.device)
         self.pos = pos.view(1, self.resolution * self.resolution * self.resolution, 3)
 
-    def __call__(self, state, scene_mesh=None, aff_kwargs={}):
-        if hasattr(state, 'tsdf_process'):
-            tsdf_process = state.tsdf_process
-        else:
-            tsdf_process = state.tsdf
+    def __call__(self, tsdf_volume, scene_mesh=None, aff_kwargs={}):
+        if isinstance(tsdf_volume, np.ndarray):
 
-        if isinstance(state.tsdf, np.ndarray):
-            tsdf_vol = state.tsdf
-            voxel_size = 0.3 / self.resolution
-            size = 0.3
+            tsdf_vol = tsdf_volume
+            voxel_size = 0.3 / self.resolution 
+            size = 0.3 
         else:
-            tsdf_vol = state.tsdf.get_grid()
-            voxel_size = tsdf_process.voxel_size
-            tsdf_process = tsdf_process.get_grid()
-            size = state.tsdf.size
+            tsdf_vol = tsdf_volume.get_grid()  
+            voxel_size = tsdf_volume.voxel_size 
+            size = tsdf_volume.size
 
         tic = time.time()
         qual_vol, rot_vol, width_vol = predict(tsdf_vol, self.pos, self.net, self.device)
@@ -903,7 +1036,7 @@ class VGNImplicit():
         rot_vol = rot_vol.reshape((self.resolution, self.resolution, self.resolution, 4))
         width_vol = width_vol.reshape((self.resolution, self.resolution, self.resolution))
 
-        qual_vol, rot_vol, width_vol = process(tsdf_process, qual_vol, rot_vol, width_vol, out_th=self.out_th)
+        #qual_vol, rot_vol, width_vol = process(tsdf_process, qual_vol, rot_vol, width_vol, out_th=self.out_th)
         qual_vol = bound(qual_vol, voxel_size)
         #if self.visualize:
         #    colored_scene_mesh = visual.affordance_visual(qual_vol, rot_vol, scene_mesh, size, self.resolution, **aff_kwargs)
@@ -926,7 +1059,23 @@ class VGNImplicit():
             scores = scores[p]
         grasps = new_grasps
 
-        return grasps, scores, toc
+        return grasps, scores
+
+def predict(tsdf_vol, pos, net, device):
+    assert tsdf_vol.shape == (1, 100, 100, 100)
+
+    # move input to the GPU
+    tsdf_vol = torch.from_numpy(tsdf_vol).to(device)
+
+    # forward pass
+    with torch.no_grad():
+        qual_vol, rot_vol, width_vol = net(tsdf_vol, pos)
+
+    # move output back to the CPU
+    qual_vol = qual_vol.cpu().squeeze().numpy()
+    rot_vol = rot_vol.cpu().squeeze().numpy()
+    width_vol = width_vol.cpu().squeeze().numpy()
+    return qual_vol, rot_vol, width_vol
 
 def bound(qual_vol, voxel_size, limit=[0.02, 0.02, 0.055]):
     # avoid grasp out of bound [0.02  0.02  0.055]
@@ -940,30 +1089,18 @@ def bound(qual_vol, voxel_size, limit=[0.02, 0.02, 0.055]):
     qual_vol[:, :, :z_lim] = 0.0
     return qual_vol
 
-def predict(tsdf_vol, net, device):
-    assert tsdf_vol.shape == (1, 40, 40, 40)
 
-    # move input to the GPU
-    tsdf_vol = torch.from_numpy(tsdf_vol).unsqueeze(0).to(device)
 
-    # forward pass
-    with torch.no_grad():
-        qual_vol, rot_vol, width_vol = net(tsdf_vol)
 
-    # move output back to the CPU
-    qual_vol = qual_vol.cpu().squeeze().numpy()
-    rot_vol = rot_vol.cpu().squeeze().numpy()
-    width_vol = width_vol.cpu().squeeze().numpy()
-    return qual_vol, rot_vol, width_vol
-
+"""
 def process(
     tsdf_vol,
     qual_vol,
     rot_vol,
     width_vol,
     gaussian_filter_sigma=1.0,
-    min_width=1.33,
-    max_width=9.33,
+    min_width=0.033,
+    max_width=0.233,
     out_th=0.5
 ):
     tsdf_vol = tsdf_vol.squeeze()
@@ -984,14 +1121,33 @@ def process(
     # reject voxels with predicted widths that are too small or too large
     qual_vol[np.logical_or(width_vol < min_width, width_vol > max_width)] = 0.0
 
-
-
     return qual_vol, rot_vol, width_vol
-
+"""
 
 LOW_TH = 0.5
 
-def select(qual_vol, rot_vol, width_vol, threshold=0.90, max_filter_size=4, force_detection=False):
+def select(qual_vol, center_vol,rot_vol, width_vol, threshold=0.90, max_filter_size=4, force_detection=False):
+    """
+    print("Size before reshape:")
+    print("qual_vol shape:", qual_vol.shape)
+    print("rot_vol shape:", rot_vol.shape)
+    print("width_vol shape:", width_vol.shape)
+
+    grid_size = int(round(qual_vol.size ** (1 / 3)))
+    if grid_size ** 3 != qual_vol.size:
+        raise ValueError("Size of qual_vol: {})".format(qual_vol.size))
+    
+    qual_vol = qual_vol.reshape((grid_size, grid_size, grid_size))
+    width_vol = width_vol.reshape((grid_size, grid_size, grid_size))
+
+    rot_vol = rot_vol.reshape((grid_size, grid_size, grid_size, 4))
+
+    print("Size after reshape:")
+    print("qual_vol shape:", qual_vol.shape)
+    print("rot_vol shape:", rot_vol.shape)
+    print("width_vol shape:", width_vol.shape)
+    """
+
     best_only = False
     qual_vol[qual_vol < LOW_TH] = 0.0
     if force_detection and (qual_vol >= threshold).sum() == 0:
@@ -1004,11 +1160,13 @@ def select(qual_vol, rot_vol, width_vol, threshold=0.90, max_filter_size=4, forc
     max_vol = ndimage.maximum_filter(qual_vol, size=max_filter_size)
     qual_vol = np.where(qual_vol == max_vol, qual_vol, 0.0)
     mask = np.where(qual_vol, 1.0, 0.0)
+    print("mask shape:", mask.shape)
 
     # construct grasps
     grasps, scores = [], []
     for index in np.argwhere(mask):
-        grasp, score = select_index(qual_vol, rot_vol, width_vol, index)
+        print("Index:", index)
+        grasp, score = select_index(qual_vol,center_vol, rot_vol, width_vol, index)
         grasps.append(grasp)
         scores.append(score)
 
@@ -1021,11 +1179,12 @@ def select(qual_vol, rot_vol, width_vol, threshold=0.90, max_filter_size=4, forc
 
     return sorted_grasps, sorted_scores
 
-def select_index(qual_vol, rot_vol, width_vol, index):
+def select_index(qual_vol,center_vol, rot_vol, width_vol, index):
+    #print("index:", index)
     i, j, k = index
     score = qual_vol[i, j, k]
-    ori = Rotation.from_quat(rot_vol[:, i, j, k])
-    pos = np.array([i, j, k], dtype=np.float64)
+    ori = Rotation.from_quat(rot_vol[i, j, k])
+    pos = center_vol[i, j, k].numpy()
     width = width_vol[i, j, k]
     return Grasp(Transform(ori, pos), width), score
 
@@ -1062,9 +1221,9 @@ def from_voxel_coordinates(grasp, voxel_size):
 def main(args=None):
     # Boilerplate code.
     rclpy.init(args=args)
-    model_type = "giga_aff_packed.pt" 
-    model_dir = "/home/sheng/GIGA/data/models" 
-    pcd_listener = PCDListener(model_type, model_dir)
+    model_type = "giga_packed.pt" 
+    model_path = "/home/sheng/GIGA/data/models" 
+    pcd_listener = PCDListener(model_type, model_path)
     try:
         rclpy.spin(pcd_listener)
     except SystemExit:
@@ -1133,7 +1292,12 @@ def transform_to_pose(tf: Transform) -> Pose:
     pose.orientation.w = tf.rotation.w
     return pose
 
-def pose_stamped_from_pose(pose: Pose, frame_id: str) -> PoseStamped:
+def pose_stamped_from_pose(pose_in: Pose, frame_id: str) -> PoseStamped:
+
+    if not isinstance(pose_in, Pose):
+        pose = transform_to_pose(pose_in)
+    else:
+        pose = pose_in
     pose_stamped = PoseStamped()
     pose_stamped.header.frame_id = frame_id
     pose_stamped.pose = pose
