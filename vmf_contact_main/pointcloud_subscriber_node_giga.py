@@ -4,6 +4,7 @@ import open3d as o3d
 import rclpy
 import sensor_msgs.msg as sensor_msgs
 from sensor_msgs.msg import PointCloud2
+import spatialmath as sm
 from rclpy.node import Node
 from rclpy.action import ActionClient
 from arm_api2_msgs.action import MoveCartesian
@@ -54,8 +55,8 @@ MOVING_TO_PREGRASP_RETURN = "moving_to_pregrasp2"
 MOVING_TO_CAMERA_READY = "moving_to_camera_ready"
 FAILED = "failed"
 
-O_RESOLUTION = 400
-O_SIZE = 0.3
+O_RESOLUTION = 40
+O_SIZE = .3
 O_VOXEL_SIZE = O_SIZE / O_RESOLUTION
 
 class State:
@@ -127,16 +128,14 @@ class PCDListener(Node):
         self.last_point_cloud_msg = None
         self.shutdown = False
         #self.agent = main_module(parse_args_from_yaml(current_file_folder + "/config.yaml"), learning=False)
-        model_type = "giga" 
-        model_path = "/home/yitian/GIGA/data/models/giga_packed.pt" 
-        self.agent = VGNImplicit(model_path, 
-                                model_type=model_type,
-                                best=True,
-                                qual_th=0.9,
-                                resolution=O_RESOLUTION,
-                                voxel_size=O_VOXEL_SIZE,
-                                out_th=0.1,
-                                visualize=True)
+        
+        model_type = "vgn" 
+        model_path = "/home/yitian/GIGA/data/models/vgn_packed.pt" 
+
+        if model_type == "vgn":
+            self.agent = VGN(model_path, model_type=model_type, best=True, force_detection=True, qual_th=0.9, out_th=0.1, visualize=False)
+        elif model_type == "giga":
+            self.agent = VGNImplicit(model_path, model_type=model_type, best=True, force_detection=True, qual_th=0.9, resolution=O_RESOLUTION, voxel_size=O_VOXEL_SIZE, out_th=0.1, visualize=False)
 
         self.movement_finished_flag = threading.Event()
         self.movement_failed_flag = threading.Event()
@@ -148,35 +147,21 @@ class PCDListener(Node):
         self.camera_ready_pose = PoseStamped()
         self.camera_ready_pose.header.frame_id = "world"
         
-        # small finger
-        # self.camera_ready_pose.pose.position.x = -0.435
-        # self.camera_ready_pose.pose.position.y = -0.572
-        # self.camera_ready_pose.pose.position.z = 1.492
 
-        self.camera_ready_pose.pose.orientation.x = 0.995
-        self.camera_ready_pose.pose.orientation.y = 0.009
-        self.camera_ready_pose.pose.orientation.z = 0.005
-        self.camera_ready_pose.pose.orientation.w = 0.100
-        
-        # long finger
-        self.camera_ready_pose.pose.position.x = -0.435
-        self.camera_ready_pose.pose.position.y = -0.794
-        self.camera_ready_pose.pose.position.z = 1.381
+        self.camera_ready_pose = list_to_pose_stamped([-0.435, -0.794, 1.381, 0.995, 0.009, 0.005, 0.100], "world") # long finger
+        # self.camera_ready_pose = list_to_pose_stamped([-0.435, -0.572, 1.492, 0.995, 0.009, 0.005, 0.100], "world") # small finger
+        self.drop_off_pose = list_to_pose_stamped([0.15, -0.75, 1.3, 1.0, 0.0, 0.0, 0.0], "world")
 
-        self.drop_off_pose = PoseStamped()
-        self.drop_off_pose.header.frame_id = "world"
-        self.drop_off_pose.pose.position.x = 0.15
-        self.drop_off_pose.pose.position.y = -0.75
-        self.drop_off_pose.pose.position.z = 1.3
-        self.drop_off_pose.pose.orientation.x = 1.0
-        self.drop_off_pose.pose.orientation.y = 0.0
-        self.drop_off_pose.pose.orientation.z = 0.0
-        self.drop_off_pose.pose.orientation.w = 0.0
+        self.pcd_center = list_to_pose_stamped([-0.86, 0.1, 0.03, 0.0, 0.0, 0.0, 1.0], "base_link")
+        self.origin_giga = list_to_pose_stamped([-1.0, -0.05, 0.03, 0.0, 0.0, 0.0, 1.0], "base_link")
 
         self.user_input_thread = threading.Thread(target=self.handle_user_input)
         self.user_input_thread.start()
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        self.publish_new_frame("pcd_center", self.pcd_center)
+        self.publish_new_frame("origin_giga", self.origin_giga)
 
     def listener_callback_pcd(self, msg: sensor_msgs.PointCloud2):
         """Callback function for the subscriber of the point cloud topic."""
@@ -238,10 +223,9 @@ class PCDListener(Node):
         pcd_from_depth = create_point_cloud_from_depth_image(self.last_depth_msg, self.camera, organized=True).reshape(-1, 3)
         
         # Look up for the transformation between base_link and the frame_id of the point cloud
-        from_frame_rel = "base_link"
         to_frame_rel = pcd_msg_camera.header.frame_id
         t_base_link_2_camera = self.tf_buffer.lookup_transform(
-                from_frame_rel, to_frame_rel, rclpy.time.Time()
+                "base_link", to_frame_rel, rclpy.time.Time()
             )
         
         pcd_numpy_base_link = transform_points(pcd_from_depth, t_base_link_2_camera.transform)  
@@ -261,11 +245,10 @@ class PCDListener(Node):
                 pcd, identifier = self.process_point_cloud()
                 if not identifier:
                     print("No object detected, please try again.")
-                    continue
-
+                
                 grasp = self.agent_inference() 
                 if grasp is not None:
-                    self.execute_grasp(grasp)
+                    self.execute_grasp(grasp, frame="origin_giga")
                 else:
                     print("No grasp pose detected, please try again.")
             elif user_input == "q":
@@ -283,15 +266,22 @@ class PCDListener(Node):
         extrinsics = self.get_extrinsics()
 
         tsdf_volume = create_tsdf(O_SIZE, O_RESOLUTION, depth_imgs, self.camera, extrinsics)
+
+        # visualize the TSDF volume
+        pcd = tsdf_volume.get_cloud()
+
         state = State(tsdf=tsdf_volume)
 
         # Perform inference
-        grasps, scores, toc, composed_scene = self.agent(state)
+        grasps, scores, toc = self.agent(state)
 
-        print(f"Number of grasps: {len(grasps)}")
-        print(f"Top grasp score: {max(scores) if scores else 'N/A'}")
+        grasp_best = grasps[scores.argmax()].pose.to_list()
+        print("Best grasp pose: ", grasp_best)
 
-        return grasps, scores
+        frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1, origin=grasp_best[4:])
+        o3d.visualization.draw_geometries([pcd, frame])
+
+        return grasp_best
     
     def print_grasp_details(self, grasp):
         print("Grasp Detailed Info:")
@@ -311,10 +301,10 @@ class PCDListener(Node):
         # return extrinsics
 
         t_robot_2_camera: TransformStamped = self.tf_buffer.lookup_transform(
-            "base_link","camera_depth_optical_frame", rclpy.time.Time()
+            "camera_color_optical_frame", "origin_giga", rclpy.time.Time()
         )
         translation = [
-            t_robot_2_camera.transform.translation.x + self.pcd_shift[0],
+            t_robot_2_camera.transform.translation.x,
             t_robot_2_camera.transform.translation.y,
             t_robot_2_camera.transform.translation.z,
         ]
@@ -332,6 +322,8 @@ class PCDListener(Node):
         # Construct the transformation matrix
         extrinsics[:, :3, :3] = rotation_matrix
         extrinsics[:, :3, 3] = translation
+
+        print("Extrinsics: ", extrinsics)
 
         return  extrinsics
 
@@ -396,10 +388,19 @@ class PCDListener(Node):
             elif state_machine_state == FAILED:
                 self.get_logger().info("State machine failed")
     
-    def execute_grasp(self, pose):
+    def execute_grasp(self, pose, frame = "base_link"):
 
         self.get_logger().info("Sending goal now...")
-        grasp_pose = pose_stamped_from_pose(pose, "base_link")
+
+        if isinstance(pose, np.ndarray):
+            pose = list(pose)
+            print("Grasp pose: ", pose)
+            pose = pose[4:] + pose[:4]
+            pose = list_to_pose(pose)
+
+        grasp_pose = pose_stamped_from_pose(pose, frame)
+
+        grasp_pose = self.transform_pose_z(grasp_pose, z_offset=0.07) # GIGA is predicting the position of the finger end, so we need to move it a bit in z direction to the tcp
 
         self.publish_new_frame("grasp_before", grasp_pose)
 
@@ -407,7 +408,7 @@ class PCDListener(Node):
 
         try:
             t_world_2_base_link = self.tf_buffer.lookup_transform(
-                "world", "base_link", rclpy.time.Time()
+                "world", frame, rclpy.time.Time()
             )
 
             # transform posestamped from base_link to world using t_world_2_base_link
@@ -503,7 +504,7 @@ class PCDListener(Node):
                         # Before gripper moves away, wait for 2 seconds
                         time.sleep(0.25)
                         # Send the goal to move to the pregrasp pose
-                        self.send_goal(self.transform_pose_z(copy.deepcopy(grasp_pose2), z_offset=-0.15))
+                        self.send_goal(pregrasp_pose)
                         state_machine_state = MOVING_TO_PREGRASP_RETURN
                         self.get_logger().info("StateMachine switched to MOVING_TO_PREGRASP_RETURN")
                         time.sleep(1)
@@ -587,7 +588,6 @@ class PCDListener(Node):
     def create_pregrasp_pose(self, grasp_pose: PoseStamped) -> PoseStamped:
         # Create a pregrasp pose by transforming the grasp pose in the z direction
         pregrasp_pose = self.transform_pose_z(grasp_pose, z_offset=-0.1)
-
         return pregrasp_pose
     
     def transform_pose_z(self, pose_stamped: PoseStamped, z_offset: float) -> PoseStamped:
@@ -734,9 +734,6 @@ def create_tsdf(size, resolution, depth_imgs, intrinsic, extrinsics):
         extrinsic = Transform.from_matrix(extrinsics[i])
         tsdf.integrate(depth_imgs[i], intrinsic, extrinsic)
 
-    # visualize the TSDF volume
-    pcd = tsdf.get_cloud()
-    print("Point cloud shape: ", pcd.points)
     return tsdf
 
 def main(args=None):
@@ -799,6 +796,24 @@ def pose_to_transform(pose: Pose, header = None) -> TransformStamped:
     tf.transform.rotation.z = pose.orientation.z
     tf.transform.rotation.w = pose.orientation.w
     return tf
+
+def list_to_pose(pose_list: list) -> Pose:
+    pose = Pose()
+    pose.position.x = pose_list[0]
+    pose.position.y = pose_list[1]
+    pose.position.z = pose_list[2]
+    pose.orientation.x = pose_list[3]
+    pose.orientation.y = pose_list[4]
+    pose.orientation.z = pose_list[5]
+    pose.orientation.w = pose_list[6]
+    return pose
+
+def list_to_pose_stamped(pose_list: list, frame_id: str) -> PoseStamped:
+    pose = list_to_pose(pose_list)
+    pose_stamped = PoseStamped()
+    pose_stamped.header.frame_id = frame_id
+    pose_stamped.pose = pose
+    return pose_stamped
 
 def transform_to_pose(tf: Transform) -> Pose:
     pose = Pose()
