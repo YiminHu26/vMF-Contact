@@ -314,7 +314,7 @@ class PCDListener(Node):
             "base_link","camera_depth_optical_frame", rclpy.time.Time()
         )
         translation = [
-            t_robot_2_camera.transform.translation.x,
+            t_robot_2_camera.transform.translation.x + self.pcd_shift[0],
             t_robot_2_camera.transform.translation.y,
             t_robot_2_camera.transform.translation.z,
         ]
