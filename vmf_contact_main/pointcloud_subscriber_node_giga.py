@@ -19,6 +19,7 @@ from tf2_ros import StaticTransformBroadcaster
 from tf2_sensor_msgs.tf2_sensor_msgs import do_transform_cloud, transform_points
 from vmf_contact_main.train import main_module, parse_args_from_yaml
 from cv_bridge import CvBridge
+import cv2
 import os, torch
 import numpy as np
 import copy
@@ -28,6 +29,7 @@ from .camera_utils import *
 from math import cos, sin
 #import spatialmath as sm
 from scipy import ndimage
+from .utils_node import *
 
 from vgn.detection import VGN
 from vgn.detection_implicit import VGNImplicit
@@ -35,10 +37,13 @@ from vgn.grasp import *
 from vgn.utils.transform import Transform, Rotation
 from vgn.perception import TSDFVolume
 
+from .active_grasp.policy import make, registry
+from .active_grasp.bbox import AABBox
+from .active_grasp.spatial import *
+import argparse
+
 # from vgn.utils import ros_utils
 from pathlib import Path
-import trimesh
-
 
 current_file_folder = os.path.dirname(os.path.abspath(__file__))
 
@@ -58,6 +63,7 @@ FAILED = "failed"
 O_RESOLUTION = 40
 O_SIZE = .3
 O_VOXEL_SIZE = O_SIZE / O_RESOLUTION
+min_z_dist = 0.3
 
 class State:
     def __init__(self, tsdf):
@@ -99,7 +105,6 @@ class PCDListener(Node):
         self.camera_info_subscriber = self.create_subscription(
             sensor_msgs.CameraInfo,  # Msg type
             "/camera/depth/camera_info",  # topic
-
             self.listener_callback_caminfo,  # Function to call
             10,  # QoS
         )
@@ -137,6 +142,7 @@ class PCDListener(Node):
         elif model_type == "giga":
             self.agent = VGNImplicit(model_path, model_type=model_type, best=True, force_detection=True, qual_th=0.9, resolution=O_RESOLUTION, voxel_size=O_VOXEL_SIZE, out_th=0.1, visualize=False)
 
+
         self.movement_finished_flag = threading.Event()
         self.movement_failed_flag = threading.Event()
         self.gripper_movement_finished_flag = threading.Event()
@@ -155,13 +161,21 @@ class PCDListener(Node):
         self.pcd_center = list_to_pose_stamped([-0.86, 0.1, 0.03, 0.0, 0.0, 0.0, 1.0], "base_link")
         self.origin_giga = list_to_pose_stamped([-1.0, -0.05, 0.03, 0.0, 0.0, 0.0, 1.0], "base_link")
 
-        self.user_input_thread = threading.Thread(target=self.handle_user_input)
-        self.user_input_thread.start()
-
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        self.publish_new_frame("pcd_center", self.pcd_center)
+        self.publish_new_frame("center_giga", self.pcd_center)
         self.publish_new_frame("origin_giga", self.origin_giga)
+
+        self.bbox: AABBox = AABBox([-0.86 - 0.15, 0.1 - 0.15, 0.0], [-0.86 + 0.15, 0.1 + 0.15, 0.09])
+
+        # Active search setting
+        parser = create_parser()
+        args = parser.parse_args()
+        self.policy = make(args.policy)
+        self.view_sphere = ViewHalfSphere(self.bbox, min_z_dist)
+
+        self.user_input_thread = threading.Thread(target=self.handle_user_input)
+        self.user_input_thread.start()
 
     def listener_callback_pcd(self, msg: sensor_msgs.PointCloud2):
         """Callback function for the subscriber of the point cloud topic."""
@@ -230,19 +244,125 @@ class PCDListener(Node):
         
         pcd_numpy_base_link = transform_points(pcd_from_depth, t_base_link_2_camera.transform)  
         
-        return pcd_numpy_base_link, True  
+        return pcd_numpy_base_link, True
+
+    def process_point_cloud_and_rgbd(self, save_data=False):
+        # TODO: add rgb image processing
+        if self.last_point_cloud_msg is None:
+            print("No point cloud message received yet.")
+            return None, False
+
+        if self.last_image_msg is None:
+            print("No image message received yet.")
+            return None, False
+    
+        if self.last_depth_msg is None:
+            print("No depth message received yet.")
+            return None, False
+
+        if self.last_point_cloud_msg is None:
+            print("No camera info message received yet.")
+            return None, False
+        
+        # Get the latest point cloud and image messages
+        pcd_msg_camera = self.last_point_cloud_msg
+        img = self.last_image_msg
+
+        # transform the point cloud to base_link frame
+        camera= CameraInfo(
+            width=self.image_width, height=self.image_height, fx=self.camera_matrix[0, 0], fy=self.camera_matrix[1, 1],
+            cx=self.camera_matrix[0, 2], cy=self.camera_matrix[1, 2], scale=1000.0
+        )
+        pcd_from_depth = create_point_cloud_from_depth_image(self.last_depth_msg, camera, organized=True).reshape(-1, 3)
+        
+        # Look up for the transformation between base_link and the frame_id of the point cloud
+        from_frame_rel = "base_link"
+        to_frame_rel = pcd_msg_camera.header.frame_id
+        t_base_link_2_camera = self.tf_buffer.lookup_transform(
+                from_frame_rel, to_frame_rel, rclpy.time.Time()
+            )
+        
+        # pcd_msg_base_link_1 = do_transform_cloud(pcd_msg_camera, t_base_link_2_camera)        
+        # pcd_numpy_base_link_1 = read_points_numpy(pcd_msg_base_link_1)
+        pcd_numpy_base_link = transform_points(pcd_from_depth, t_base_link_2_camera.transform)  
+        # print("First 10 points: ", pcd_numpy_base_link[:10])
+
+        # pcd = o3d.geometry.PointCloud()
+        # pcd.points = o3d.utility.Vector3dVector(pcd_numpy_base_link_1)
+        # pcd_new = o3d.geometry.PointCloud()
+        # pcd_new.points = o3d.utility.Vector3dVector(pcd_numpy_base_link)
+        # o3d.visualization.draw_geometries([pcd, pcd_new])
+        
+        ## save the depth image with gray scale, normalized to 0-255
+        # pcd_from_depth_z = pcd_from_depth[..., 2]
+        # pcd_from_depth_z = (pcd_from_depth_z - pcd_from_depth_z.min()) / (pcd_from_depth_z.max() - pcd_from_depth_z.min()) * 255
+        # cv2.imwrite(f"{current_file_folder}/depth.jpg", pcd_from_depth_z)
+
+        # remove previous masks
+        for file in os.listdir(current_file_folder):
+            if file.endswith(".jpg"):
+                os.remove(os.path.join(current_file_folder, file))
+        
+        # transformation to pose
+        cam_pose_robot = transform_to_pose(t_base_link_2_camera.transform)
+
+        # save the image, depth, point cloud and camera pose as a dictionary of numpy arrays
+        # viszualize the rgbd data
+        if save_data:
+            name = f"/home/yitian/data_active_grasp/{cam_pose_robot.position.x}_{cam_pose_robot.position.y}_{cam_pose_robot.position.z}"
+            cv2.imwrite(f"image.jpg", img[..., ::-1])
+            dict_rgbd = {
+                "image": img,
+                "depth": self.last_depth_msg,
+                "pcd": pcd_numpy_base_link,
+                "cam_pose": [cam_pose_robot.position.x, 
+                            cam_pose_robot.position.y, 
+                            cam_pose_robot.position.z,
+                            cam_pose_robot.orientation.x, 
+                            cam_pose_robot.orientation.y, 
+                            cam_pose_robot.orientation.z, 
+                            cam_pose_robot.orientation.w]
+            }
+            np.savez(f"{name}.npz", **dict_rgbd)
+
+        return (pcd_numpy_base_link, self.last_image_msg, self.last_depth_msg, cam_pose_robot), True
+  
 
     def handle_user_input(self):
+        while True:
+            try:
+                self.camera= CameraInfo(
+                    width=int(self.image_width), 
+                    height=int(self.image_height), 
+                    fx=self.camera_matrix[0, 0], 
+                    fy=self.camera_matrix[1, 1],
+                    cx=self.camera_matrix[0, 2], 
+                    cy=self.camera_matrix[1, 2], 
+                    scale=1.0
+                )
+                print("Camera info received: ", self.camera)
+                break
+            except:
+                print("No camera info received yet.")
+                time.sleep(1)
+
+        self.policy.activate(self.bbox, self.view_sphere, self.camera)
+
+        self.send_goal(self.camera_ready_pose)
+        print("Camera ready pose sent: ", self.camera_ready_pose)
+        self.open_gripper()
 
         while True:
-            self.send_goal(self.camera_ready_pose)
-            print("Camera ready pose sent: ", self.camera_ready_pose)
-            self.open_gripper()
-
             user_input = input("Enter 's' to start next capture and 'q' to quit: ")
             if user_input == "s":
 
-                pcd, identifier = self.process_point_cloud()
+                while not self.policy.done:
+                    (pcd, rgb, d, cam_pose), identifier = self.process_point_cloud_and_rgbd()
+                    extrinsic = self.get_extrinsics()[0]
+                    depth_imgs = self.last_depth_msg.astype(np.float32) / 1000.0
+                    self.policy.update(depth_imgs, extrinsic, self.camera)
+                    self.send_vel_cmd()
+
                 if not identifier:
                     print("No object detected, please try again.")
                 
@@ -301,7 +421,7 @@ class PCDListener(Node):
         # return extrinsics
 
         t_robot_2_camera: TransformStamped = self.tf_buffer.lookup_transform(
-            "camera_color_optical_frame", "origin_giga", rclpy.time.Time()
+            "base_link", "camera_color_optical_frame", rclpy.time.Time()
         )
         translation = [
             t_robot_2_camera.transform.translation.x,
@@ -327,67 +447,6 @@ class PCDListener(Node):
 
         return  extrinsics
 
-    
-    def change_view(self, pose_base_link_2_camera, elevation=0, azimuth=0):
-
-        self.get_logger().info("Sending goal now...")
-
-        try:
-            t_world_2_base_link: TransformStamped = self.tf_buffer.lookup_transform(
-                "world", "base_link", rclpy.time.Time()
-            )
-            t_camera_2_tcp: TransformStamped = self.tf_buffer.lookup_transform(
-                "camera_color_optical_frame","tcp", rclpy.time.Time()
-            )
-            # transform posestamped from base_link to world using t_world_2_base_link
-            pose_world_2_camera = tf2_geometry_msgs.do_transform_pose(pose_base_link_2_camera, t_world_2_base_link)
-            t_world_2_camera = pose_to_transform(pose_world_2_camera, "world")
-            pose_camera_2_tcp = transform_to_pose(t_camera_2_tcp.transform)
-            pose_world_2_tcp = tf2_geometry_msgs.do_transform_pose(pose_camera_2_tcp, t_world_2_camera)
-
-            pose_stamped = pose_stamped_from_pose(pose_world_2_tcp, "world")
-            self.publish_new_frame(f"view_ele_{elevation}_azi_{azimuth}", pose_stamped_from_pose(pose_world_2_camera, "world"))
-
-            print("View pose in world frame: ", pose_stamped.pose.position)
-            print("View orientation in world frame: ", pose_stamped.pose.orientation)
-
-        except TransformException as ex:
-            self.get_logger().info(
-                f"Could not transform pose from base_link to world: {ex}"
-            )
-            return
-        
-        self.stop_event.clear()
-        self.movement_failed_flag.clear()
-        self.movement_finished_flag.clear()
-        state_machine_state = IDLE
-        
-        while True:
-            if state_machine_state == IDLE:
-                # Send the goal to move to the pregrasp pose
-                self.send_goal(pose_stamped)
-                # Start the state machine
-                state_machine_state = MOVING_TO_PREGRASP
-                self.get_logger().info("StateMachine switched to MOVING_TO_PREGRASP")
-                # Create a thread to handle the input
-                self.cancel_thread = threading.Thread(target=self.get_input)
-                self.cancel_thread.start()
-
-            elif state_machine_state == MOVING_TO_PREGRASP:
-                # Wait for the action server to finish
-                if self.movement_finished_flag.is_set():
-                    self.movement_finished_flag.clear()
-                    state_machine_state = IDLE
-                    self.get_logger().info("State machine finished")
-                    break
-                if self.movement_failed_flag.is_set():
-                    self.movement_failed_flag.clear()
-                    state_machine_state = FAILED
-                    self.get_logger().info("StateMachine switched to FAILED")
-
-            elif state_machine_state == FAILED:
-                self.get_logger().info("State machine failed")
-    
     def execute_grasp(self, pose, frame = "base_link"):
 
         self.get_logger().info("Sending goal now...")
@@ -670,7 +729,6 @@ class PCDListener(Node):
         else:
             self.movement_failed_flag.set()
     
-
     def robot_feedback_callback(self, feedback_msg):
         feedback = feedback_msg.feedback
         self.get_logger().info("Feedback: {0}".format(feedback.status))
@@ -728,6 +786,26 @@ class PCDListener(Node):
         command.max_effort = 150.0  # 20 N - 235 N
         self.send_gripper_command(command)
 
+    def send_vel_cmd(self):
+        if self.policy.x_d is None or self.policy.done:
+            cmd = np.zeros(6)
+        else:
+            x: TransformStamped = self.tf_buffer.lookup_transform(
+            "base_link", "camera_color_optical_frame", rclpy.time.Time()
+            ).transform
+            cmd = self.compute_velocity_cmd(self.policy.x_d, x)
+
+    def compute_velocity_cmd(self, x_d, x):
+        r, theta, phi = cartesian_to_spherical(x.translation - self.view_sphere.center)
+        e_t = x_d.translation - x.translation
+        e_n = (x.translation - self.view_sphere.center) * (self.view_sphere.r - r) / r
+        linear = 1.0 * e_t + 6.0 * (r < self.view_sphere.r) * e_n
+        scale = np.linalg.norm(linear) + 1e-6
+        linear *= np.clip(scale, 0.0, self.linear_vel) / scale
+        angular = self.view_sphere.get_view(theta, phi).rotation * x.rotation.inv()
+        angular = 1.0 * angular.as_rotvec()
+        return np.r_[linear, angular]
+
 def create_tsdf(size, resolution, depth_imgs, intrinsic, extrinsics):
     tsdf = TSDFVolume(size, resolution)
     for i in range(depth_imgs.shape[0]):
@@ -747,103 +825,15 @@ def main(args=None):
 
     pcd_listener.destroy_node()
     rclpy.shutdown()
-    
-def look_at_transformation(gaze_point, robot_position):
-    """
-    Compute a transformation matrix that aligns the robot's orientation to look at a gaze point.
-    
-    :param gaze_point: (x, y, z) coordinates of the gaze target in the world frame
-    :param robot_position: (x, y, z) coordinates of the robot's reference point (e.g., end-effector or camera)
-    :return: (position, quaternion) representing the pose
-    """
-    gaze_point = np.array(gaze_point)
-    robot_position = np.array(robot_position)
 
-    # Compute direction vector from robot to gaze point
-    direction = gaze_point - robot_position
-    direction /= np.linalg.norm(direction)  # Normalize
-
-    # Define a reference up vector (assuming Z-up world frame)
-    left_vector = np.array([0, -1, 0])
-
-    # Compute right vector (cross product of up and direction)
-    up_vector = np.cross(left_vector, direction)
-    up_vector /= np.linalg.norm(up_vector)
-
-    # Compute new up vector (orthogonal to both direction and right)
-    right_vector = np.cross(up_vector, direction)
-
-    # Construct rotation matrix
-    rotation_matrix = np.eye(4)
-    rotation_matrix[:3, 0] = right_vector
-    rotation_matrix[:3, 1] = up_vector
-    rotation_matrix[:3, 2] = direction
-    rotation_matrix[:3, 3] = robot_position  # Set translation
-
-    # Convert rotation matrix to quaternion
-    quaternion = quaternion_from_matrix(rotation_matrix)
-
-    return list(quaternion)
-
-def pose_to_transform(pose: Pose, header = None) -> TransformStamped:
-    tf = TransformStamped()
-    tf.header.frame_id = header
-    tf.transform.translation.x = pose.position.x
-    tf.transform.translation.y = pose.position.y
-    tf.transform.translation.z = pose.position.z
-    tf.transform.rotation.x = pose.orientation.x
-    tf.transform.rotation.y = pose.orientation.y
-    tf.transform.rotation.z = pose.orientation.z
-    tf.transform.rotation.w = pose.orientation.w
-    return tf
-
-def list_to_pose(pose_list: list) -> Pose:
-    pose = Pose()
-    pose.position.x = pose_list[0]
-    pose.position.y = pose_list[1]
-    pose.position.z = pose_list[2]
-    pose.orientation.x = pose_list[3]
-    pose.orientation.y = pose_list[4]
-    pose.orientation.z = pose_list[5]
-    pose.orientation.w = pose_list[6]
-    return pose
-
-def list_to_pose_stamped(pose_list: list, frame_id: str) -> PoseStamped:
-    pose = list_to_pose(pose_list)
-    pose_stamped = PoseStamped()
-    pose_stamped.header.frame_id = frame_id
-    pose_stamped.pose = pose
-    return pose_stamped
-
-def transform_to_pose(tf: Transform) -> Pose:
-    pose = Pose()
-    pose.position.x = tf.translation.x
-    pose.position.y = tf.translation.y
-    pose.position.z = tf.translation.z
-    pose.orientation.x = tf.rotation.x
-    pose.orientation.y = tf.rotation.y
-    pose.orientation.z = tf.rotation.z
-    pose.orientation.w = tf.rotation.w
-    return pose
-
-def pose_stamped_from_pose(pose_in: Pose, frame_id: str) -> PoseStamped:
-
-    if not isinstance(pose_in, Pose):
-        pose = transform_to_pose(pose_in)
-    else:
-        pose = pose_in
-    pose_stamped = PoseStamped()
-    pose_stamped.header.frame_id = frame_id
-    pose_stamped.pose = pose
-    return pose_stamped
-
-def azi_to_pos(azimuth, elevation, distance):
-    azimuth = np.deg2rad(azimuth)
-    elevation = np.deg2rad(elevation)
-    x = distance * np.cos(azimuth) * np.cos(elevation)
-    y = distance * np.sin(azimuth) * np.cos(elevation)
-    z = distance * np.sin(elevation)
-    return [x, y, z]
+def create_parser():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--policy", type=str, choices=registry.keys(), default="nbv")
+    parser.add_argument("--runs", type=int, default=10)
+    parser.add_argument("--wait-for-input", action="store_true")
+    parser.add_argument("--logdir", type=Path, default="logs")
+    parser.add_argument("--seed", type=int, default=1)
+    return parser
 
 if __name__ == "__main__":
     main()
