@@ -41,6 +41,7 @@ from .active_grasp.policy import make, registry
 from .active_grasp.bbox import AABBox
 from .active_grasp.spatial import *
 from .active_grasp.timer import Timer
+from .active_grasp.vlm import VLMPolicy
 
 import argparse
 
@@ -336,6 +337,117 @@ class PCDListener(Node):
                 self.last_depth_msg.astype(np.float32) / 1000.0, 
                 cam_pose_robot), True
   
+    def handle_user_input_vlm(self):
+
+        self.get_camera_info()
+        self.generate_trajectory()
+
+        while True:
+            # Move to the camera ready pose
+            self.send_goal(self.camera_ready_pose)
+            self.open_gripper()
+
+            user_input = input("Enter 's' to start next capture and 'q' to quit: ")
+            if user_input == "s":
+                # Initialize the search policy
+                self.view_sphere = ViewHalfSphere(self.bbox, min_z_dist)
+                self.policy.activate(self.bbox, self.view_sphere, self.intrinsics)
+                
+                # execute = threading.Thread(target=self.send_vel_cmd)
+                # execute.start()
+                # self.create_timer(1.0 / control_rate, self.send_vel_cmd)
+
+                self.rate = self.create_rate(policy_rate)
+                with Timer("Search time"):
+                    while not self.policy.done:
+                        (pcd, rgb, d, cam_pose), identifier = self.process_point_cloud_and_rgbd()
+                        if not identifier:
+                            self.get_logger().info("No object detected, please try again.")
+                            continue
+                        extrinsic = self.get_extrinsics(inverse=True)[0]
+                        self.policy.update(d, extrinsic, self.intrinsics)
+                        print("Searching for grasp...")
+                        # self.rate.sleep()
+                        self.send_vel_cmd()
+                    self.rate.sleep()
+                    grasp = self.policy.best_grasp
+                
+                self.get_logger().info("Search policy done, start grasp execution.")
+                if grasp is not None:
+                    with Timer("Grasp execution"):
+                        success = self.execute_grasp(grasp.pose)
+                else:
+                    self.get_logger().info("Aborted grasp execution.")
+                    success = False
+            elif user_input == "q":
+                self.shutdown = True
+                break
+
+    def VLM_inference(self, pose: Pose, rgb, d):
+        # Extract the current pose
+        current_position = pose.position
+        current_orientation = pose.orientation
+
+        # Convert quaternion to rotation matrix
+        rotation_matrix = quaternion_matrix([current_orientation.x, 
+                                             current_orientation.y, 
+                                             current_orientation.z, 
+                                             current_orientation.w])
+        pos = [current_position.x, current_position.y, current_position.z]
+
+        # TODO: add vlm inference
+        # camera_pos_increment, gaze_point = self.vlm_agent(rgb, d)
+        # camera_pos = camera_pos + camera_pos_increment * 0.1
+        gaze_point_robot = [-0.74, 0.1, 0.031] # TODO: remove this line, this is a test for gazing at middle of the desk
+
+        quaternion = look_at_transformation(gaze_point_robot, pos)
+        
+        pose.position.x = pos[0]
+        pose.position.y = pos[1]
+        pose.position.z = pos[2]
+        pose.orientation.x = quaternion[0]
+        pose.orientation.y = quaternion[1]
+        pose.orientation.z = quaternion[2]
+        pose.orientation.w = quaternion[3]
+
+        return pose
+    
+    def generate_trajectory(self):
+        traj = []
+        gaze_point_robot = [-0.74, 0.1, 0.031] # TODO: remove this line, this is a test for gazing at middle of the desk
+        dist = .47 # np.linalg.norm(np.array(gaze_point_robot) - np.array(pos))
+        azi_ele_groups = [
+            [(-90, -50), (30, 155)], 
+            [(-50, 0), (50, 135)],
+            [(0, 50), (50, 135)],
+            [(50, 90), (30, 155)]
+            ]
+        
+        round = 0
+        for azi_ele in azi_ele_groups:
+            for azimuth in range(*azi_ele[0], 5):
+                t = []            
+                ele_range = range(*azi_ele[1]) if round % 2 == 0 else range(*azi_ele[1])[::-1]
+                for elevation in ele_range:
+                    pos = azi_to_pos(azimuth, elevation, dist)
+                    pos =[pos[i] + gaze_point_robot[i] for i in range(3)]
+                    quaternion = look_at_transformation(gaze_point_robot, pos)
+                    t.append(pos + quaternion)
+                round += 1
+                traj.append(self.create_trajectory(t))
+
+        for t in traj:
+            while not self.movement_finished_flag.is_set():
+                camera_data, is_data = self.process_point_cloud_and_rgbd(save_data=True)
+                # if is_data:
+                #     pcd = camera_data[0]
+                #     grasp, grasp_criterien = self.agent_inference(pcd)
+                pass
+            print("Sending trajectory")
+            self.movement_finished_flag.clear()
+            self.send_goal_traj(t)            
+    
+    
     def handle_user_input(self):
     
         self.get_camera_info()

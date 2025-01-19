@@ -1,6 +1,6 @@
 from .policy import register
 from .baselines import *
-from .nbv import NextBestView
+from .vlm import NextBestView
 
 register("initial-view", InitialView)
 register("top-view", TopView)
