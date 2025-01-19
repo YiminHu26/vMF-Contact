@@ -1,7 +1,7 @@
 import numpy as np
 from geometry_msgs.msg import Pose, PoseStamped, Transform, TransformStamped
-from tf_transformations import quaternion_from_matrix, quaternion_matrix, euler_from_quaternion, quaternion_from_euler
-from .active_grasp.spatial import SpatialTransform
+from tf_transformations import quaternion_from_matrix, quaternion_matrix, translation_from_matrix
+from vmf_contact_main.active_grasp.spatial import SpatialTransform
 from scipy.spatial.transform import Rotation
 
 def pose_from_spacial_transform(spacial_transform: SpatialTransform) -> Pose:
@@ -16,6 +16,18 @@ def pose_from_spacial_transform(spacial_transform: SpatialTransform) -> Pose:
     pose.orientation.w = quat[3]
     return pose
 
+def translate_pose(self, pose_chosen):
+
+    # Convert the rotation matrix to a quaternion
+    quat = quaternion_from_matrix(pose_chosen)
+    translation = translation_from_matrix(pose_chosen)
+    # print("Chosen quaternion: ", quat)
+
+    pose_chosen = np.concatenate([translation, quat])
+    print("Chosen pose: ", pose_chosen)
+
+    return pose_chosen, False
+    
 def look_at_transformation(gaze_point, robot_position):
     """
     Compute a transformation matrix that aligns the robot's orientation to look at a gaze point.
