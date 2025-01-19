@@ -75,7 +75,7 @@ class AIRNodeVLM(AIRNode):
             if user_input == "s":
                 # Initialize the search policy
                 self.view_sphere = ViewHalfSphere(self.bbox, min_z_dist)
-                self.policy.activate(self.bbox, self.view_sphere, self.intrinsics, self.pcd_shift)
+                self.policy.activate(self.bbox, self.intrinsics, self.pcd_shift)
                 
                 # execute = threading.Thread(target=self.send_vel_cmd)
                 # execute.start()

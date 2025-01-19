@@ -27,7 +27,7 @@ class VLMPolicy(MultiViewPolicy):
         self.downsample = 10
         self.langsam_model = LangSAM() if use_langsam else None
 
-    def activate(self, bbox, view_sphere, intrinsic, pcd_shift):
+    def activate(self, bbox, intrinsic, pcd_shift):
         self.intrinsic = intrinsic
         self.bbox = bbox
         self.view_sphere = ViewHalfSphere(bbox, self.min_z_dist)
@@ -71,8 +71,6 @@ class VLMPolicy(MultiViewPolicy):
         
         # TODO: add criteria for grasp execution
         # Process the point cloud
-        self.pcd_shift = pcd.mean(axis=0)
-        self.pcd_shift[2] = 0.0
         pcd = (pcd_raw - self.pcd_shift)
         pcd = pcd[(pcd[:, 0] > -O_SIZE) & (pcd[:, 0] < O_SIZE)]
         pcd = pcd[(pcd[:, 1] > -O_SIZE) & (pcd[:, 1] < O_SIZE)]
