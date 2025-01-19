@@ -2,6 +2,7 @@ import numpy as np
 from geometry_msgs.msg import Pose, PoseStamped, Transform, TransformStamped
 from tf_transformations import quaternion_from_matrix, quaternion_matrix, euler_from_quaternion, quaternion_from_euler
 from .active_grasp.spatial import SpatialTransform
+from scipy.spatial.transform import Rotation
 
 def pose_from_spacial_transform(spacial_transform: SpatialTransform) -> Pose:
     pose = Pose()
@@ -86,44 +87,44 @@ def transform_to_pose(tf: Transform) -> Pose:
     pose.orientation.w = tf.rotation.w
     return pose
 
-def apply_transform_to_pose(pose: Pose, transform: list) -> Pose:
+def apply_transform_to_pose(pose, transform):
     """
-    Apply a 6-element positional and angular transform to a geometry_msgs.msg.Pose.
+    Apply a 6-element positional and angular transform (rotation vector) to a geometry_msgs.msg.Pose.
 
     Args:
         pose (Pose): The input pose.
-        transform (list): A 6-element list [dx, dy, dz, droll, dpitch, dyaw] representing positional and angular changes.
+        transform (list): A 6-element list [dx, dy, dz, rx, ry, rz] where
+                          dx, dy, dz are positional changes,
+                          rx, ry, rz are the angular changes as a rotation vector.
 
     Returns:
         Pose: The transformed pose.
     """
     if len(transform) != 6:
-        raise ValueError("Transform must be a 6-element list: [dx, dy, dz, droll, dpitch, dyaw]")
+        raise ValueError("Transform must be a 6-element list: [dx, dy, dz, rx, ry, rz]")
 
-    # Extract positional and angular changes
-    dx, dy, dz, droll, dpitch, dyaw = transform
+    # Extract position and rotation vector changes
+    dx, dy, dz, rx, ry, rz = transform
 
     # Apply positional changes
     pose.position.x += dx
     pose.position.y += dy
     pose.position.z += dz
 
-    # Convert quaternion to Euler angles
-    quat = [
-        pose.orientation.x,
-        pose.orientation.y,
-        pose.orientation.z,
-        pose.orientation.w
-    ]
-    roll, pitch, yaw = euler_from_quaternion(quat)
+    # Convert current pose quaternion to rotation matrix
+    current_quat = [pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w]
+    current_rot = Rotation.from_quat(current_quat)
 
-    # Apply angular changes
-    roll += droll
-    pitch += dpitch
-    yaw += dyaw
+    # Convert rotation vector to rotation matrix
+    delta_rot = Rotation.from_rotvec([rx, ry, rz])
 
-    # Convert back to quaternion
-    new_quat = quaternion_from_euler(roll, pitch, yaw)
+    # Apply the rotation change by combining rotations
+    new_rot = delta_rot * current_rot 
+
+    # Convert new rotation back to quaternion
+    new_quat = new_rot.as_quat()
+    
+    # Update the pose with the new quaternion
     pose.orientation.x = new_quat[0]
     pose.orientation.y = new_quat[1]
     pose.orientation.z = new_quat[2]

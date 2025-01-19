@@ -30,6 +30,7 @@ from math import cos, sin
 #import spatialmath as sm
 from scipy import ndimage
 from .utils_node import *
+import asyncio
 
 from vgn.detection import VGN
 from vgn.detection_implicit import VGNImplicit
@@ -66,8 +67,8 @@ O_RESOLUTION = 40
 O_SIZE = .3
 O_VOXEL_SIZE = O_SIZE / O_RESOLUTION
 min_z_dist = 0.3
-linear_vel = 0.05
-angular_vel = .1
+linear_vel = 0.1
+angular_vel = 1
 control_rate = 30
 policy_rate = 4
 qual_th = 0.8
@@ -373,7 +374,8 @@ class PCDListener(Node):
                 
                 # execute = threading.Thread(target=self.send_vel_cmd)
                 # execute.start()
-                
+                # self.create_timer(1.0 / control_rate, self.send_vel_cmd)
+
                 self.rate = self.create_rate(policy_rate)
                 with Timer("Search time"):
                     while not self.policy.done:
@@ -772,7 +774,7 @@ class PCDListener(Node):
 
     def robot_get_result_callback(self, future):
         result = future.result().result
-        self.get_logger().info("Result: {0}".format(result))
+        self.get_logger().info(f"Result: {result}")
         if result.success:
             self.movement_finished_flag.set()
         else:
@@ -841,10 +843,7 @@ class PCDListener(Node):
         else:
             t_robot_2_camera = self.tf_buffer.lookup_transform("base_link", "camera_color_optical_frame", rclpy.time.Time()).transform
             x = SpatialTransform.from_matrix(transform_to_matrix(t_robot_2_camera))
-            print(self.policy.x_d.translation)
-            print(x.translation)
             cmd = self.compute_velocity_cmd(self.policy.x_d, x, linear_vel=linear_vel, angular_vel=angular_vel)  
-            print(f"Velocity command: {cmd}")
 
         if cmd is not None and not all([cmd[i] == 0 for i in range(6)]):
 
@@ -853,14 +852,13 @@ class PCDListener(Node):
 
             pose_robot_2_camera_next: Pose = pose_from_spacial_transform(self.policy.x_d)
             self.publish_new_frame("camera_target_view", pose_stamped_from_pose(pose_robot_2_camera_next, "base_link"))
-            pose_robot_2_camera_next = apply_transform_to_pose(pose_robot_2_camera, cmd)  
-            # print("After move: ", pose_robot_2_camera_next.position.x, pose_robot_2_camera_next.position.y, pose_robot_2_camera_next.position.z)     
+            # pose_robot_2_camera_next = apply_transform_to_pose(pose_robot_2_camera, cmd)  
+            print("After move: ", pose_robot_2_camera_next.position.x, pose_robot_2_camera_next.position.y, pose_robot_2_camera_next.position.z)     
 
             try:
-                assert self.change_view(pose_robot_2_camera_next), "Failed to move the robot to the next view."
-            except AssertionError as e:
-                self.get_logger().info(e)
-                self.movement_failed_flag.set()
+                assert self.change_view(pose_robot_2_camera_next)
+            except:
+                self.get_logger().info("Failed to move the robot to the next view, keep searching...")
                 return
             
         # send the velocity command to the robot
