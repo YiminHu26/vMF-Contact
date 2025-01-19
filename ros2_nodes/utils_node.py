@@ -4,6 +4,21 @@ from tf_transformations import quaternion_from_matrix, quaternion_matrix, transl
 from vmf_contact_main.active_grasp.spatial import SpatialTransform
 from scipy.spatial.transform import Rotation
 
+# Function to mark duplicates with a number
+def mark_duplicates(labels):
+    label_count = {}
+    result = []
+    
+    for label in labels:
+        if label in label_count:
+            label_count[label] += 1
+        else:
+            label_count[label] = 1
+        result.append(f"{label}_{label_count[label]}")
+    
+    return result
+
+
 def pose_from_spacial_transform(spacial_transform: SpatialTransform) -> Pose:
     pose = Pose()
     pose.position.x = spacial_transform.translation[0]

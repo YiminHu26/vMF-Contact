@@ -35,9 +35,10 @@ class AIRNodeVLM(AIRNode):
 
     def __init__(self):
         super().__init__()
-        
-        self.pcd_center = list_to_pose_stamped([-0.86, 0.1, 0.03, 0.0, 0.0, 0.0, 1.0], "base_link")
-        self.publish_new_frame("center_giga", self.pcd_center)
+
+        self.pcd_shift=np.array([-0.86, 0.1, 0.031])
+        self.pcd_center = list_to_pose_stamped(self.pcd_shift.tolist() + [0., 0., 0., 1.], "base_link")
+        self.publish_new_frame("center", self.pcd_center)
             
         lower = [self.pcd_center.pose.position.x - O_SIZE / 2, 
                     self.pcd_center.pose.position.y - O_SIZE / 2, 
@@ -74,7 +75,7 @@ class AIRNodeVLM(AIRNode):
             if user_input == "s":
                 # Initialize the search policy
                 self.view_sphere = ViewHalfSphere(self.bbox, min_z_dist)
-                self.policy.activate(self.bbox, self.view_sphere, self.intrinsics, self.pcd_resize, self.pcd_shift)
+                self.policy.activate(self.bbox, self.view_sphere, self.intrinsics, self.pcd_shift)
                 
                 # execute = threading.Thread(target=self.send_vel_cmd)
                 # execute.start()
@@ -105,6 +106,43 @@ class AIRNodeVLM(AIRNode):
             elif user_input == "q":
                 self.shutdown = True
                 break
+
+    def send_vel_cmd(self):
+        if self.policy.x_d is None or self.policy.done:
+            cmd = np.zeros(6)
+        else:
+            t_robot_2_camera = self.tf_buffer.lookup_transform("base_link", "camera_color_optical_frame", rclpy.time.Time()).transform
+            x = SpatialTransform.from_matrix(transform_to_matrix(t_robot_2_camera))
+            cmd = self.compute_velocity_cmd(self.policy.x_d, x, linear_vel=linear_vel, angular_vel=angular_vel)  
+
+        if cmd is not None and not all([cmd[i] == 0 for i in range(6)]):
+
+            pose_robot_2_camera: Pose = transform_to_pose(t_robot_2_camera)
+            print("Before move: ", pose_robot_2_camera.position.x, pose_robot_2_camera.position.y, pose_robot_2_camera.position.z)
+
+            pose_robot_2_camera_next: Pose = pose_from_spacial_transform(self.policy.x_d)
+            self.publish_new_frame("camera_target_view", pose_stamped_from_pose(pose_robot_2_camera_next, "base_link"))
+            # pose_robot_2_camera_next = apply_transform_to_pose(pose_robot_2_camera, cmd)  
+            print("After move: ", pose_robot_2_camera_next.position.x, pose_robot_2_camera_next.position.y, pose_robot_2_camera_next.position.z)     
+
+            try:
+                assert self.change_view(pose_robot_2_camera_next)
+            except:
+                self.get_logger().info("Failed to move the robot to the next view, keep searching...")
+                return
+            
+        # send the velocity command to the robot
+
+    def compute_velocity_cmd(self, x_d, x, linear_vel=0.05, angular_vel=1):
+        r, theta, phi = cartesian_to_spherical(x.translation - self.view_sphere.center)
+        e_t = x_d.translation - x.translation # translation error
+        e_n = (x.translation - self.view_sphere.center) * (self.view_sphere.r - r) / r # pull the camera towards the sphere
+        linear = 1.0 * e_t + 6.0 * (r < self.view_sphere.r) * e_n # weighted sum of the two errors
+        scale = np.linalg.norm(linear) + 1e-6
+        linear *= np.clip(scale, 0.0, linear_vel) / scale # scale the linear velocity
+        angular = self.view_sphere.get_view(theta, phi).rotation * x.rotation.inv() # desired rotation
+        angular = angular_vel * angular.as_rotvec()
+        return np.r_[linear, angular]
     
     def generate_trajectory(self):
         traj = []
@@ -140,27 +178,7 @@ class AIRNodeVLM(AIRNode):
             print("Sending trajectory")
             self.movement_finished_flag.clear()
             self.send_goal_traj(t)            
-    
-    def handle_user_input(self):
-    
-        self.get_camera_info()
-
-        while True:
-            self.send_goal(self.camera_ready_pose)
-            self.open_gripper()
-            user_input = input("Enter 's' to start next capture and 'q' to quit: ")
-            if user_input == "s":
-                (pcd, rgb, d, cam_pose), identifier = self.process_point_cloud_and_rgbd()
-                if not identifier:
-                    continue
-                grasp = self.agent_inference_giga(d) 
-                if grasp is not None:
-                    self.execute_grasp(grasp, frame="origin_giga")
-                else:
-                    self.get_logger().info("No grasp pose detected, please try again.")
-            elif user_input == "q":
-                self.shutdown = True
-                break
+            
 
 def main(args=None):
     # Boilerplate code.

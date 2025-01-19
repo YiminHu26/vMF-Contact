@@ -22,11 +22,17 @@ from tf_transformations import quaternion_matrix
 import tf2_geometry_msgs
 #import spatialmath as sm
 from .utils_node import *
+from lang_sam import LangSAM
+from PIL import Image
 
 from vmf_contact_main.camera_utils import *
 from vmf_contact_main.active_grasp.spatial import *
 
 current_file_folder = os.path.dirname(os.path.abspath(__file__))
+
+#image_pil = Image.open("./assets/car.jpeg").convert("RGB")
+#text_prompt = "wheel."
+#results = model.predict([image_pil], [text_prompt])
 
 # define state machine states
 IDLE = "idle"
@@ -43,7 +49,7 @@ MOVING = "moving"
 
 class AIRNode(Node):
 
-    def __init__(self):
+    def __init__(self, use_langsam=False):
         super().__init__("pcd_subsriber_node")
         
         self.stitched_pointcloud_topic = "/cloud_stitched"  
@@ -97,8 +103,6 @@ class AIRNode(Node):
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
-        self.pcd_shift=np.array([-0.86, 0.1, 0.031])
-        self.pcd_resize=np.array(1)
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self.last_point_cloud_msg = None
@@ -114,7 +118,12 @@ class AIRNode(Node):
 
         self.camera_ready_pose = PoseStamped()
         self.camera_ready_pose.header.frame_id = "world"
-        
+
+        self.camera_ready_pose = list_to_pose_stamped([-0.435, -0.794, 1.381, 0.995, 0.009, 0.005, 0.100], "world") # long finger
+        # self.camera_ready_pose = list_to_pose_stamped([-0.435, -0.572, 1.492, 0.995, 0.009, 0.005, 0.100], "world") # small finger
+        self.drop_off_pose: PoseStamped = list_to_pose_stamped([0.15, -0.75, 1.3, 1.0, 0.0, 0.0, 0.0], "world")
+
+        self.langsam_model = LangSAM() if use_langsam else None
 
     def get_camera_info(self):
         while True:
@@ -203,6 +212,55 @@ class AIRNode(Node):
         
         # transformation to pose
         cam_pose_robot = transform_to_pose(t_robot_2_camera.transform)
+
+        # remove previous masks
+        for file in os.listdir(current_file_folder):
+            if file.endswith(".jpg"):
+                os.remove(os.path.join(current_file_folder, file))
+        
+        if self.langsam_model is not None:
+            time_curr = time.time()
+            prompt_input = ""
+            while prompt_input == "":
+                prompt_input = input("Please enter what you would like to grasp: ")
+            prompt_input = prompt_input.split(".")
+            print("Prompt: ", prompt_input)
+        
+            self.masked_pcd_dict = {}
+            # predict masks with lang_sam
+            results = self.langsam_model.predict([Image.fromarray(img)], [". ".join(prompt_input)])
+
+            print(f"Time taken for inference: {time.time() - time_curr}")
+
+            print(f"save images to {current_file_folder}")
+            cv2.imwrite(f"{current_file_folder}/image.jpg", cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
+            
+            # check if there are labels detected
+            labels = results[0]["labels"]
+            if len(labels) == 0:
+                print("No labels detected.")
+                return pcd_numpy_base_link, False
+            # check duplicates in labels, if there are duplicates, mark them with a number
+            labels = mark_duplicates(labels)
+            print("Results: ", labels)
+            print("Scores: ", results[0]["scores"])
+
+            # mask point cloud and image
+            for i, text in enumerate(labels):
+                mask = results[0]["masks"][i].astype(np.uint8)[:, :, None]
+                # mask image and point cloud
+                pcd_masked = pcd_numpy_base_link[mask.reshape(-1) == 1]
+                self.masked_pcd_dict[text] = pcd_masked
+                
+                # save masked image
+                cv2.imwrite(f"{current_file_folder}/{text}.jpg", img[..., ::-1] * mask)
+                
+                # # visualize the masked point cloud
+                # pcd_masked_color = img.reshape(-1, 3)[mask.reshape(-1) == 1]
+                # pcd = o3d.geometry.PointCloud()
+                # pcd.points = o3d.utility.Vector3dVector(pcd_masked)
+                # pcd.colors = o3d.utility.Vector3dVector(pcd_masked_color[:, ::-1] / 255)
+                # o3d.visualization.draw_geometries([pcd], window_name=text)
 
         # save the image, depth, point cloud and camera pose as a dictionary of numpy arrays
         # viszualize the rgbd data
@@ -331,8 +389,9 @@ class AIRNode(Node):
         if isinstance(pose, np.ndarray):
             pose = list(pose)
             self.get_logger().info(f"Grasp pose: {pose}")
-            pose = pose[4:] + pose[:4]
+            # pose = pose[4:] + pose[:4]
             pose = list_to_pose(pose)
+
         elif isinstance(pose, SpatialTransform):
             print(pose.translation)
             pose = pose_from_spacial_transform(pose)

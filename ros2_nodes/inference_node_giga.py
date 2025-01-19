@@ -29,7 +29,7 @@ linear_vel = 0.1
 angular_vel = 1
 control_rate = 30
 policy_rate = 4
-qual_th = 0.8
+qual_th = 0.6
 
 class State:
     def __init__(self, tsdf):
@@ -40,12 +40,17 @@ class AIRNodeGIGA(AIRNode):
     def __init__(self):
         super().__init__()
         
-        self.pcd_center = list_to_pose_stamped([-0.86, 0.1, 0.03, 0.0, 0.0, 0.0, 1.0], "base_link")
-        self.publish_new_frame("center_giga", self.pcd_center)
+        self.pcd_shift=np.array([-0.86, 0.1, 0.031])
+        self.pcd_center = list_to_pose_stamped(self.pcd_shift.tolist() + [0., 0., 0., 1.], "base_link")
+        self.publish_new_frame("center", self.pcd_center)
 
         model_type = "vgn" 
         model_path = "/home/yitian/GIGA/data/models/vgn_packed.pt"
-        self.origin_giga = list_to_pose_stamped([-1.0, -0.05, 0.03, 0.0, 0.0, 0.0, 1.0], "base_link")
+        self.origin_giga = list_to_pose_stamped([self.pcd_shift[0] - O_SIZE / 2,
+                                                self.pcd_shift[1] - O_SIZE / 2,
+                                                self.pcd_shift[2],
+                                                0., 0., 0., 1.],
+                                                "base_link")
         self.publish_new_frame("origin_giga", self.origin_giga) 
 
         if model_type == "vgn":
@@ -82,16 +87,18 @@ class AIRNodeGIGA(AIRNode):
                 (pcd, rgb, d, cam_pose), identifier = self.process_point_cloud_and_rgbd()
                 if not identifier:
                     continue
-                grasp = self.agent_inference_giga(d) 
+                grasp = self.agent_inference(d) 
                 if grasp is not None:
-                    self.execute_grasp(grasp, frame="origin_giga")
+                    success = self.execute_grasp(grasp, frame="origin_giga")
+                    if success:
+                        self.get_logger().info("Grasp successful.")
                 else:
                     self.get_logger().info("No grasp pose detected, please try again.")
             elif user_input == "q":
                 self.shutdown = True
                 break
             
-    def agent_inference_giga(self, depth_imgs):
+    def agent_inference(self, depth_imgs):
         if self.last_depth_msg is None or self.camera_matrix is None:
             self.get_logger().info("Missing depth image or camera info.")
             return None
@@ -102,16 +109,16 @@ class AIRNodeGIGA(AIRNode):
 
         # visualize the TSDF volume
         pcd = tsdf_volume.get_cloud()
-        state = State(tsdf=tsdf_volume)
+        frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1, origin=[0, 0, 0])
+        o3d.visualization.draw_geometries([pcd, frame])
 
+        state = State(tsdf=tsdf_volume)
         # Perform inference
         grasps, scores, toc = self.agent(state)
-
         grasp_best = grasps[scores.argmax()].pose.to_list()
-        self.get_logger().info(f"Best grasp pose: {grasp_best}")
 
-        frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1, origin=grasp_best[4:])
-        o3d.visualization.draw_geometries([pcd, frame])
+        grasp_best = np.concatenate([grasp_best[4:],grasp_best[:4]]) # [x, y, z, qx, qy, qz, qw] -> [qx, qy, qz, qw, x, y, z]
+        self.get_logger().info(f"Best grasp pose: {grasp_best}")
 
         return grasp_best
 

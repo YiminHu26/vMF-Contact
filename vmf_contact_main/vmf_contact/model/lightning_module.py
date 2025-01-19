@@ -725,13 +725,13 @@ class GraspBuffer:
                                       convention=convention)
         return poses, kappa, graspness
     
-    def set_view(self):
+    def set_view(self, center):
         """Set a specific viewpoint."""
         ctr = self.vis.get_view_control()
 
         # Set camera parameters
         ctr.set_zoom(1)  # Zoom factor
-        ctr.set_lookat([-0.74, 0.1, 0.031])  # Look at center
+        ctr.set_lookat(center)  # Look at center
         ctr.set_front([-1, 0, 1])  # View direction
         ctr.set_up([0, 0, 1])  # Up vector
     
@@ -761,7 +761,8 @@ class GraspBuffer:
         for geom in vis_list:
             self.vis.add_geometry(geom)
         # Update the visualizer
-        self.set_view()
+        center = pcd.mean(0).cpu().numpy()
+        self.set_view(center = center)
         self.vis.poll_events()
         self.vis.update_renderer()            
 
