@@ -12,13 +12,13 @@ class ViewHalfSphere:
 
     def get_view(self, theta, phi):
         eye = self.center + spherical_to_cartesian(self.r, theta, phi)
-        up = np.r_[1.0, 0.0, 0.0]
+        up = np.r_[-1.0, 0.0, 0.0]
         return look_at(eye, self.center, up)
 
     def sample_view(self):
         raise NotImplementedError
     
-class Transform:
+class SpatialTransform:
     def __init__(self, rotation, translation):
         self.rotation = copy.deepcopy(rotation)
         self.translation = np.asarray(translation, np.double).copy()
@@ -105,7 +105,7 @@ class Transform:
         """
 
         def __getitem__(self, key):
-            return Transform.from_translation(np.r_[key])
+            return SpatialTransform.from_translation(np.r_[key])
 
     t_ = TClass()
 
@@ -140,7 +140,7 @@ def look_at(eye, center, up):
     m[:3, 1] = -up
     m[:3, 2] = forward
     m[:3, 3] = eye
-    return Transform.from_matrix(m)
+    return SpatialTransform.from_matrix(m)
 
 
 def view_on_sphere(origin, r, theta, phi):
@@ -193,7 +193,7 @@ def select_at(out, index):
     pos = np.array([i, j, k], dtype=np.float64)
     width = out.width[i, j, k]
     quality = out.qual[i, j, k]
-    return Grasp(Transform(ori, pos), width), quality
+    return Grasp(SpatialTransform(ori, pos), width), quality
 
 def select_local_maxima(
     voxel_size,

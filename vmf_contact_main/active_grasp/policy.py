@@ -26,7 +26,6 @@ class Policy():
 
         self.calibrate_task_frame()
         self.tsdf = UniformTSDFVolume(0.3, 40)
-        model_type = "" 
         model_path = "/home/yitian/GIGA/data/models/vgn_conv.pth" 
 
         self.vgn = VGN(Path(model_path))
@@ -39,7 +38,7 @@ class Policy():
     
     def calibrate_task_frame(self):
         xyz = np.r_[self.bbox.center[:2] - 0.15, self.bbox.min[2] - 0.05]
-        self.T_base_task = Transform.from_translation(xyz)
+        self.T_base_task = SpatialTransform.from_translation(xyz)
         self.T_task_base = self.T_base_task.inv()
 
     def update(self, img, x, q):
@@ -74,10 +73,11 @@ class SingleViewPolicy(Policy):
         if np.linalg.norm(linear) < 0.02:
             self.views.append(x)
             self.tsdf.integrate(img, self.intrinsic, x.inv() * self.T_base_task)
-            scene_cloud = self.tsdf.get_map_cloud()
+            tsdf_grid = self.tsdf.get_grid()
 
-            tsdf = self.tsdf.get_grid()
-            out = self.vgn(tsdf)
+            scene_cloud = self.tsdf.get_map_cloud()
+            o3d.visualization.draw_geometries([scene_cloud])
+            out = self.vgn(tsdf_grid)
 
             grasps, qualities = self.filter_grasps(out, q)
 
@@ -98,20 +98,19 @@ class MultiViewPolicy(Policy):
         self.qual_hist = np.zeros((self.T,) + (40,) * 3, np.float32)
 
     def integrate(self, img, x, q):
-        if not isinstance(x, Transform):
-            x = Transform.from_matrix(x)
+        if not isinstance(x, SpatialTransform):
+            x = SpatialTransform.from_matrix(x)
         self.views.append(x)
 
         with Timer("tsdf_integration"):
             self.tsdf.integrate(img, self.intrinsic, x.inv() * self.T_base_task)
 
-        scene_cloud = self.tsdf.get_map_cloud()
-
-        o3d.visualization.draw_geometries([scene_cloud])
+        # scene_cloud = self.tsdf.get_map_cloud()
+        # o3d.visualization.draw_geometries([scene_cloud])
 
         with Timer("grasp_prediction"):
-            tsdf = self.tsdf.get_grid()
-            out = self.vgn.predict(tsdf)
+            tsdf_grid = self.tsdf.get_grid()
+            out = self.vgn.predict(tsdf_grid)
 
         t = (len(self.views) - 1) % self.T
         self.qual_hist[t, ...] = out.qual

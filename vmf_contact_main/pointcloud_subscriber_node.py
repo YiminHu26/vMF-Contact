@@ -312,10 +312,8 @@ class PCDListener(Node):
         pcd_from_depth = create_point_cloud_from_depth_image(self.last_depth_msg, camera, organized=True).reshape(-1, 3)
         
         # Look up for the transformation between base_link and the frame_id of the point cloud
-        from_frame_rel = "base_link"
-        to_frame_rel = pcd_msg_camera.header.frame_id
         t_base_link_2_camera = self.tf_buffer.lookup_transform(
-                from_frame_rel, to_frame_rel, rclpy.time.Time()
+                "base_link", pcd_msg_camera.header.frame_id, rclpy.time.Time()
             )
         
         # pcd_msg_base_link_1 = do_transform_cloud(pcd_msg_camera, t_base_link_2_camera)        

@@ -99,7 +99,7 @@ class NextBestView(MultiViewPolicy):
             i = np.argmax(utilities)
             nbv, gain = views[i], gains[i]
 
-            print("NBV: ", nbv, "Gain: ", gain)
+            print("NBV: ", nbv.translation, "Gain: ", gain)
 
             if gain < self.min_gain and len(self.views) > self.T:
                 self.done = True
@@ -177,7 +177,7 @@ class NextBestView(MultiViewPolicy):
         i, j, k = indices[mask].T
         tsdfs = tsdf_grid[i, j, k]
         ig = np.logical_and(tsdfs > -1.0, tsdfs < 0.0).sum()
-
+        
         return ig
 
     def cost_fn(self, view):

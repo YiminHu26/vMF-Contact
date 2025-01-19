@@ -1,7 +1,20 @@
 import numpy as np
 from geometry_msgs.msg import Pose, PoseStamped, Transform, TransformStamped
-from tf_transformations import quaternion_from_matrix
-    
+from tf_transformations import quaternion_from_matrix, quaternion_matrix, euler_from_quaternion, quaternion_from_euler
+from .active_grasp.spatial import SpatialTransform
+
+def pose_from_spacial_transform(spacial_transform: SpatialTransform) -> Pose:
+    pose = Pose()
+    pose.position.x = spacial_transform.translation[0]
+    pose.position.y = spacial_transform.translation[1]
+    pose.position.z = spacial_transform.translation[2]
+    quat = spacial_transform.rotation.as_quat()
+    pose.orientation.x = quat[0]
+    pose.orientation.y = quat[1]
+    pose.orientation.z = quat[2]
+    pose.orientation.w = quat[3]
+    return pose
+
 def look_at_transformation(gaze_point, robot_position):
     """
     Compute a transformation matrix that aligns the robot's orientation to look at a gaze point.
@@ -72,6 +85,57 @@ def transform_to_pose(tf: Transform) -> Pose:
     pose.orientation.z = tf.rotation.z
     pose.orientation.w = tf.rotation.w
     return pose
+
+def apply_transform_to_pose(pose: Pose, transform: list) -> Pose:
+    """
+    Apply a 6-element positional and angular transform to a geometry_msgs.msg.Pose.
+
+    Args:
+        pose (Pose): The input pose.
+        transform (list): A 6-element list [dx, dy, dz, droll, dpitch, dyaw] representing positional and angular changes.
+
+    Returns:
+        Pose: The transformed pose.
+    """
+    if len(transform) != 6:
+        raise ValueError("Transform must be a 6-element list: [dx, dy, dz, droll, dpitch, dyaw]")
+
+    # Extract positional and angular changes
+    dx, dy, dz, droll, dpitch, dyaw = transform
+
+    # Apply positional changes
+    pose.position.x += dx
+    pose.position.y += dy
+    pose.position.z += dz
+
+    # Convert quaternion to Euler angles
+    quat = [
+        pose.orientation.x,
+        pose.orientation.y,
+        pose.orientation.z,
+        pose.orientation.w
+    ]
+    roll, pitch, yaw = euler_from_quaternion(quat)
+
+    # Apply angular changes
+    roll += droll
+    pitch += dpitch
+    yaw += dyaw
+
+    # Convert back to quaternion
+    new_quat = quaternion_from_euler(roll, pitch, yaw)
+    pose.orientation.x = new_quat[0]
+    pose.orientation.y = new_quat[1]
+    pose.orientation.z = new_quat[2]
+    pose.orientation.w = new_quat[3]
+
+    return pose
+
+def transform_to_matrix(tf: Transform) -> np.ndarray:
+    matrix = np.eye(4)
+    matrix[:3, 3] = [tf.translation.x, tf.translation.y, tf.translation.z]
+    matrix[:3, :3] = quaternion_matrix([tf.rotation.x, tf.rotation.y, tf.rotation.z, tf.rotation.w])[:3, :3]
+    return matrix
 
 def pose_stamped_from_pose(pose: Pose, frame_id: str) -> PoseStamped:
     pose_stamped = PoseStamped()

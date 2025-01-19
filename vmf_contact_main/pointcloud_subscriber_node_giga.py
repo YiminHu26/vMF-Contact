@@ -11,7 +11,7 @@ from arm_api2_msgs.action import MoveCartesian
 from control_msgs.action import GripperCommand
 from control_msgs.msg import GripperCommand as GripperCommandMsg
 from sensor_msgs_py.point_cloud2 import read_points_numpy
-from geometry_msgs.msg import PoseStamped, TransformStamped, Pose, Transform
+from geometry_msgs.msg import PoseStamped, TransformStamped
 from tf2_ros import TransformException
 from tf2_ros.buffer import Buffer
 from tf2_ros.transform_listener import TransformListener
@@ -34,12 +34,13 @@ from .utils_node import *
 from vgn.detection import VGN
 from vgn.detection_implicit import VGNImplicit
 from vgn.grasp import *
-from vgn.utils.transform import Transform, Rotation
-from vgn.perception import TSDFVolume
+from vgn.perception import create_tsdf
 
 from .active_grasp.policy import make, registry
 from .active_grasp.bbox import AABBox
 from .active_grasp.spatial import *
+from .active_grasp.timer import Timer
+
 import argparse
 
 # from vgn.utils import ros_utils
@@ -59,11 +60,19 @@ RELEASEING = "releasing"
 MOVING_TO_PREGRASP_RETURN = "moving_to_pregrasp2"
 MOVING_TO_CAMERA_READY = "moving_to_camera_ready"
 FAILED = "failed"
+MOVING = "moving"
 
 O_RESOLUTION = 40
 O_SIZE = .3
 O_VOXEL_SIZE = O_SIZE / O_RESOLUTION
 min_z_dist = 0.3
+linear_vel = 0.05
+angular_vel = .1
+control_rate = 30
+policy_rate = 4
+qual_th = 0.8
+
+ACTIVE_GRASP = True
 
 class State:
     def __init__(self, tsdf):
@@ -104,7 +113,7 @@ class PCDListener(Node):
 
         self.camera_info_subscriber = self.create_subscription(
             sensor_msgs.CameraInfo,  # Msg type
-            "/camera/depth/camera_info",  # topic
+            "/camera/color/camera_info",  # topic
             self.listener_callback_caminfo,  # Function to call
             10,  # QoS
         )
@@ -132,17 +141,7 @@ class PCDListener(Node):
 
         self.last_point_cloud_msg = None
         self.shutdown = False
-        #self.agent = main_module(parse_args_from_yaml(current_file_folder + "/config.yaml"), learning=False)
         
-        model_type = "vgn" 
-        model_path = "/home/yitian/GIGA/data/models/vgn_packed.pt" 
-
-        if model_type == "vgn":
-            self.agent = VGN(model_path, model_type=model_type, best=True, force_detection=True, qual_th=0.9, out_th=0.1, visualize=False)
-        elif model_type == "giga":
-            self.agent = VGNImplicit(model_path, model_type=model_type, best=True, force_detection=True, qual_th=0.9, resolution=O_RESOLUTION, voxel_size=O_VOXEL_SIZE, out_th=0.1, visualize=False)
-
-
         self.movement_finished_flag = threading.Event()
         self.movement_failed_flag = threading.Event()
         self.gripper_movement_finished_flag = threading.Event()
@@ -156,26 +155,77 @@ class PCDListener(Node):
 
         self.camera_ready_pose = list_to_pose_stamped([-0.435, -0.794, 1.381, 0.995, 0.009, 0.005, 0.100], "world") # long finger
         # self.camera_ready_pose = list_to_pose_stamped([-0.435, -0.572, 1.492, 0.995, 0.009, 0.005, 0.100], "world") # small finger
-        self.drop_off_pose = list_to_pose_stamped([0.15, -0.75, 1.3, 1.0, 0.0, 0.0, 0.0], "world")
+        self.drop_off_pose: PoseStamped = list_to_pose_stamped([0.15, -0.75, 1.3, 1.0, 0.0, 0.0, 0.0], "world")
 
         self.pcd_center = list_to_pose_stamped([-0.86, 0.1, 0.03, 0.0, 0.0, 0.0, 1.0], "base_link")
-        self.origin_giga = list_to_pose_stamped([-1.0, -0.05, 0.03, 0.0, 0.0, 0.0, 1.0], "base_link")
-
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
         self.publish_new_frame("center_giga", self.pcd_center)
-        self.publish_new_frame("origin_giga", self.origin_giga)
 
-        self.bbox: AABBox = AABBox([-0.86 - 0.15, 0.1 - 0.15, 0.0], [-0.86 + 0.15, 0.1 + 0.15, 0.09])
+        if ACTIVE_GRASP:
+            
+            lower = [self.pcd_center.pose.position.x - O_SIZE / 2, 
+                     self.pcd_center.pose.position.y - O_SIZE / 2, 
+                     self.pcd_center.pose.position.z]
+            upper = [self.pcd_center.pose.position.x + O_SIZE / 2,
+                    self.pcd_center.pose.position.y + O_SIZE / 2,
+                    self.pcd_center.pose.position.z + 0.09]
+            
+            middle = (np.array(lower) + np.array(upper)) / 2
+            self.box_center = list_to_pose_stamped(middle.tolist() + [0., 0., 0., 1.], "base_link")
+            self.publish_new_frame("box_center", self.box_center)
 
-        # Active search setting
-        parser = create_parser()
-        args = parser.parse_args()
-        self.policy = make(args.policy)
-        self.view_sphere = ViewHalfSphere(self.bbox, min_z_dist)
+            self.bbox: AABBox = AABBox(lower, upper)
+            
+            # Active search setting
+            parser = create_parser()
+            args = parser.parse_args()
+            self.policy = make(args.policy)
+            self.user_input_thread = threading.Thread(target=self.handle_user_input_active)
+        else:
+            model_type = "vgn" 
+            model_path = "/home/yitian/GIGA/data/models/vgn_packed.pt"
+            self.origin_giga = list_to_pose_stamped([-1.0, -0.05, 0.03, 0.0, 0.0, 0.0, 1.0], "base_link")
+            self.publish_new_frame("origin_giga", self.origin_giga) 
 
-        self.user_input_thread = threading.Thread(target=self.handle_user_input)
+            if model_type == "vgn":
+                self.agent = VGN(model_path, 
+                                 model_type=model_type, 
+                                 best=True, 
+                                 force_detection=True, 
+                                 qual_th=qual_th, 
+                                 out_th=0.1, 
+                                 visualize=False)
+            elif model_type == "giga":
+                self.agent = VGNImplicit(model_path, 
+                                         model_type=model_type, 
+                                         best=True, 
+                                         force_detection=True, 
+                                         qual_th=qual_th, 
+                                         resolution=O_RESOLUTION, 
+                                         voxel_size=O_VOXEL_SIZE, 
+                                         out_th=0.1, 
+                                         visualize=False)
+            self.user_input_thread = threading.Thread(target=self.handle_user_input)
+
         self.user_input_thread.start()
+
+    def get_camera_info(self):
+        while True:
+            try:
+                print("Waiting for camera info...")
+                self.intrinsics= CameraInfo(
+                    width=int(self.image_width), 
+                    height=int(self.image_height), 
+                    fx=self.camera_matrix[0, 0], 
+                    fy=self.camera_matrix[1, 1],
+                    cx=self.camera_matrix[0, 2], 
+                    cy=self.camera_matrix[1, 2], 
+                    scale=1.0
+                )
+                self.get_logger().info(f"Camera info received: {self.intrinsics}")
+                break
+            except:
+                self.get_logger().info("No camera info received yet.")
+                time.sleep(1)
 
     def listener_callback_pcd(self, msg: sensor_msgs.PointCloud2):
         """Callback function for the subscriber of the point cloud topic."""
@@ -203,66 +253,23 @@ class PCDListener(Node):
         if self.shutdown:
             raise SystemExit
 
-    def process_point_cloud(self):
-        if self.last_point_cloud_msg is None:
-            print("No point cloud message received yet.")
-            return None, False
-
-        if self.last_image_msg is None:
-            print("No image message received yet.")
-            return None, False
-    
-        if self.last_depth_msg is None:
-            print("No depth message received yet.")
-            return None, False
-
-        if self.last_point_cloud_msg is None:
-            print("No camera info message received yet.")
-            return None, False
-        
-        # Get the latest point cloud and image messages
-        pcd_msg_camera = self.last_point_cloud_msg
-        img = self.last_image_msg
-
-        # transform the point cloud to base_link frame
-        self.camera= CameraInfo(
-            width=int(self.image_width), 
-            height=int(self.image_height), 
-            fx=self.camera_matrix[0, 0], 
-            fy=self.camera_matrix[1, 1],
-            cx=self.camera_matrix[0, 2], 
-            cy=self.camera_matrix[1, 2], 
-            scale=1.0
-        )
-        pcd_from_depth = create_point_cloud_from_depth_image(self.last_depth_msg, self.camera, organized=True).reshape(-1, 3)
-        
-        # Look up for the transformation between base_link and the frame_id of the point cloud
-        to_frame_rel = pcd_msg_camera.header.frame_id
-        t_base_link_2_camera = self.tf_buffer.lookup_transform(
-                "base_link", to_frame_rel, rclpy.time.Time()
-            )
-        
-        pcd_numpy_base_link = transform_points(pcd_from_depth, t_base_link_2_camera.transform)  
-        
-        return pcd_numpy_base_link, True
-
     def process_point_cloud_and_rgbd(self, save_data=False):
         # TODO: add rgb image processing
         if self.last_point_cloud_msg is None:
-            print("No point cloud message received yet.")
-            return None, False
+            self.get_logger().info("No point cloud message received yet.")
+            return [None] * 4, False
 
         if self.last_image_msg is None:
-            print("No image message received yet.")
-            return None, False
+            self.get_logger().info("No image message received yet.")
+            return [None] * 4, False
     
         if self.last_depth_msg is None:
-            print("No depth message received yet.")
-            return None, False
+            self.get_logger().info("No depth message received yet.")
+            return [None] * 4, False
 
         if self.last_point_cloud_msg is None:
-            print("No camera info message received yet.")
-            return None, False
+            self.get_logger().info("No camera info message received yet.")
+            return [None] * 4, False
         
         # Get the latest point cloud and image messages
         pcd_msg_camera = self.last_point_cloud_msg
@@ -276,16 +283,14 @@ class PCDListener(Node):
         pcd_from_depth = create_point_cloud_from_depth_image(self.last_depth_msg, camera, organized=True).reshape(-1, 3)
         
         # Look up for the transformation between base_link and the frame_id of the point cloud
-        from_frame_rel = "base_link"
-        to_frame_rel = pcd_msg_camera.header.frame_id
-        t_base_link_2_camera = self.tf_buffer.lookup_transform(
-                from_frame_rel, to_frame_rel, rclpy.time.Time()
+        t_robot_2_camera = self.tf_buffer.lookup_transform(
+                "base_link", pcd_msg_camera.header.frame_id, rclpy.time.Time()
             )
         
-        # pcd_msg_base_link_1 = do_transform_cloud(pcd_msg_camera, t_base_link_2_camera)        
+        # pcd_msg_base_link_1 = do_transform_cloud(pcd_msg_camera, t_robot_2_camera)        
         # pcd_numpy_base_link_1 = read_points_numpy(pcd_msg_base_link_1)
-        pcd_numpy_base_link = transform_points(pcd_from_depth, t_base_link_2_camera.transform)  
-        # print("First 10 points: ", pcd_numpy_base_link[:10])
+        pcd_numpy_base_link = transform_points(pcd_from_depth, t_robot_2_camera.transform)  
+        # self.get_logger().info("First 10 points: ", pcd_numpy_base_link[:10])
 
         # pcd = o3d.geometry.PointCloud()
         # pcd.points = o3d.utility.Vector3dVector(pcd_numpy_base_link_1)
@@ -304,7 +309,7 @@ class PCDListener(Node):
                 os.remove(os.path.join(current_file_folder, file))
         
         # transformation to pose
-        cam_pose_robot = transform_to_pose(t_base_link_2_camera.transform)
+        cam_pose_robot = transform_to_pose(t_robot_2_camera.transform)
 
         # save the image, depth, point cloud and camera pose as a dictionary of numpy arrays
         # viszualize the rgbd data
@@ -325,104 +330,112 @@ class PCDListener(Node):
             }
             np.savez(f"{name}.npz", **dict_rgbd)
 
-        return (pcd_numpy_base_link, self.last_image_msg, self.last_depth_msg, cam_pose_robot), True
+        return (pcd_numpy_base_link, 
+                self.last_image_msg, 
+                self.last_depth_msg.astype(np.float32) / 1000.0, 
+                cam_pose_robot), True
   
-
     def handle_user_input(self):
-        while True:
-            try:
-                self.camera= CameraInfo(
-                    width=int(self.image_width), 
-                    height=int(self.image_height), 
-                    fx=self.camera_matrix[0, 0], 
-                    fy=self.camera_matrix[1, 1],
-                    cx=self.camera_matrix[0, 2], 
-                    cy=self.camera_matrix[1, 2], 
-                    scale=1.0
-                )
-                print("Camera info received: ", self.camera)
-                break
-            except:
-                print("No camera info received yet.")
-                time.sleep(1)
-
-        self.policy.activate(self.bbox, self.view_sphere, self.camera)
-
-        self.send_goal(self.camera_ready_pose)
-        print("Camera ready pose sent: ", self.camera_ready_pose)
-        self.open_gripper()
+    
+        self.get_camera_info()
 
         while True:
+            self.send_goal(self.camera_ready_pose)
+            self.open_gripper()
             user_input = input("Enter 's' to start next capture and 'q' to quit: ")
             if user_input == "s":
-
-                while not self.policy.done:
-                    (pcd, rgb, d, cam_pose), identifier = self.process_point_cloud_and_rgbd()
-                    extrinsic = self.get_extrinsics()[0]
-                    depth_imgs = self.last_depth_msg.astype(np.float32) / 1000.0
-                    self.policy.update(depth_imgs, extrinsic, self.camera)
-                    self.send_vel_cmd()
-
+                (pcd, rgb, d, cam_pose), identifier = self.process_point_cloud_and_rgbd()
                 if not identifier:
-                    print("No object detected, please try again.")
-                
-                grasp = self.agent_inference() 
+                    continue
+                grasp = self.agent_inference(d) 
                 if grasp is not None:
                     self.execute_grasp(grasp, frame="origin_giga")
                 else:
-                    print("No grasp pose detected, please try again.")
+                    self.get_logger().info("No grasp pose detected, please try again.")
+            elif user_input == "q":
+                self.shutdown = True
+                break
+    
+    def handle_user_input_active(self):
+
+        self.get_camera_info()
+        success = False
+        while True:
+            # Move to the camera ready pose
+            self.send_goal(self.camera_ready_pose)
+            self.open_gripper()
+
+            user_input = input("Enter 's' to start next capture and 'q' to quit: ")
+            if user_input == "s":
+                # Initialize the search policy
+                self.view_sphere = ViewHalfSphere(self.bbox, min_z_dist)
+                self.policy.activate(self.bbox, self.view_sphere, self.intrinsics)
+                
+                # execute = threading.Thread(target=self.send_vel_cmd)
+                # execute.start()
+                
+                self.rate = self.create_rate(policy_rate)
+                with Timer("Search time"):
+                    while not self.policy.done:
+                        (pcd, rgb, d, cam_pose), identifier = self.process_point_cloud_and_rgbd()
+                        if not identifier:
+                            self.get_logger().info("No object detected, please try again.")
+                            continue
+                        extrinsic = self.get_extrinsics(inverse=True)[0]
+                        self.policy.update(d, extrinsic, self.intrinsics)
+                        print("Searching for grasp...")
+                        # self.rate.sleep()
+                        self.send_vel_cmd()
+                    self.rate.sleep()
+                    grasp = self.policy.best_grasp
+                
+                self.get_logger().info("Search policy done, start grasp execution.")
+                if grasp is not None:
+                    with Timer("Grasp execution"):
+                        success = self.execute_grasp(grasp.pose)
+                else:
+                    self.get_logger().info("Aborted grasp execution.")
+                    success = False
             elif user_input == "q":
                 self.shutdown = True
                 break
   
   
-    def agent_inference(self):
+    def agent_inference(self, depth_imgs):
         if self.last_depth_msg is None or self.camera_matrix is None:
-            print("Missing depth image or camera info.")
+            self.get_logger().info("Missing depth image or camera info.")
             return None
         
-        depth_imgs = np.expand_dims(self.last_depth_msg, axis=0).astype(np.float32) / 1000.0
-        
         extrinsics = self.get_extrinsics()
-
-        tsdf_volume = create_tsdf(O_SIZE, O_RESOLUTION, depth_imgs, self.camera, extrinsics)
+        depth_imgs = np.expand_dims(depth_imgs, axis=0)
+        tsdf_volume = create_tsdf(O_SIZE, O_RESOLUTION, depth_imgs, self.intrinsics, extrinsics)
 
         # visualize the TSDF volume
         pcd = tsdf_volume.get_cloud()
-
         state = State(tsdf=tsdf_volume)
 
         # Perform inference
         grasps, scores, toc = self.agent(state)
 
         grasp_best = grasps[scores.argmax()].pose.to_list()
-        print("Best grasp pose: ", grasp_best)
+        self.get_logger().info(f"Best grasp pose: {grasp_best}")
 
         frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1, origin=grasp_best[4:])
         o3d.visualization.draw_geometries([pcd, frame])
 
         return grasp_best
-    
-    def print_grasp_details(self, grasp):
-        print("Grasp Detailed Info:")
-        print("  Width: ", grasp.width)
-        if hasattr(grasp.pose, 'translation'):
-            print("  Translation: ", grasp.pose.translation)
-        else:
-            print("  Translation: N/A")
-        if hasattr(grasp.pose, 'rotation'):
-            print("  Rotation: ", grasp.pose.rotation)
-        else:
-            print("  Rotation: N/A")
 
-
-    def get_extrinsics(self):
+    def get_extrinsics(self, inverse=False):
         extrinsics = np.expand_dims(np.eye(4), axis=0)
         # return extrinsics
-
-        t_robot_2_camera: TransformStamped = self.tf_buffer.lookup_transform(
-            "base_link", "camera_color_optical_frame", rclpy.time.Time()
-        )
+        if inverse:
+            t_robot_2_camera: TransformStamped = self.tf_buffer.lookup_transform(
+                "base_link", "camera_color_optical_frame", rclpy.time.Time()
+            )
+        else:
+            t_robot_2_camera: TransformStamped = self.tf_buffer.lookup_transform(
+                "camera_color_optical_frame", "origin_giga", rclpy.time.Time()
+            )
         translation = [
             t_robot_2_camera.transform.translation.x,
             t_robot_2_camera.transform.translation.y,
@@ -443,9 +456,67 @@ class PCDListener(Node):
         extrinsics[:, :3, :3] = rotation_matrix
         extrinsics[:, :3, 3] = translation
 
-        print("Extrinsics: ", extrinsics)
+        # self.get_logger().info(f"Extrinsics: {extrinsics}")
 
         return  extrinsics
+    
+    def camera_robot_pose_to_tcp_world_pose(self, pose_robot_2_camera: Pose):
+        t_world_2_base_link: TransformStamped = self.tf_buffer.lookup_transform(
+                "world", "base_link", rclpy.time.Time()
+            )
+        t_camera_2_tcp: TransformStamped = self.tf_buffer.lookup_transform(
+            "camera_color_optical_frame","tcp", rclpy.time.Time()
+        )
+        # transform posestamped from base_link to world using t_world_2_base_link
+        pose_world_2_camera = tf2_geometry_msgs.do_transform_pose(pose_robot_2_camera, t_world_2_base_link)
+        t_world_2_camera = pose_to_transform(pose_world_2_camera, "world")
+        pose_camera_2_tcp = transform_to_pose(t_camera_2_tcp.transform)
+        pose_world_2_tcp = tf2_geometry_msgs.do_transform_pose(pose_camera_2_tcp, t_world_2_camera)
+
+        pose_stamped = pose_stamped_from_pose(pose_world_2_tcp, "world")
+        return pose_stamped, pose_world_2_camera
+    
+    def change_view(self, pose_robot_2_camera):
+
+        self.get_logger().info("Sending goal now...")
+
+        pose_stamped, pose_world_2_camera = self.camera_robot_pose_to_tcp_world_pose(pose_robot_2_camera)
+
+        self.publish_new_frame(f"camera_target_view_velocity", pose_stamped_from_pose(pose_world_2_camera, "world"))
+        
+        self.stop_event.clear()
+        self.movement_failed_flag.clear()
+        self.movement_finished_flag.clear()
+        state_machine_state = IDLE
+        
+        while True:
+            if state_machine_state == IDLE:
+                # Send the goal to move to the pregrasp pose
+                self.send_goal(pose_stamped)
+                # Start the state machine
+                state_machine_state = MOVING
+                self.get_logger().info("StateMachine switched to MOVING")
+                # # Create a thread to handle the input
+                # self.cancel_thread = threading.Thread(target=self.get_input)
+                # self.cancel_thread.start()
+
+            else:
+                # Wait for the action server to finish
+                if self.movement_finished_flag.is_set():
+                    self.movement_finished_flag.clear()
+                    state_machine_state = IDLE
+                    self.get_logger().info("State machine finished")
+                    break
+
+                if self.movement_failed_flag.is_set():
+                    self.movement_failed_flag.clear()
+                    state_machine_state = FAILED
+                    self.get_logger().info("StateMachine switched to FAILED")
+
+                elif state_machine_state == FAILED:
+                    self.get_logger().info("State machine failed")
+                    return False
+        return True
 
     def execute_grasp(self, pose, frame = "base_link"):
 
@@ -453,47 +524,33 @@ class PCDListener(Node):
 
         if isinstance(pose, np.ndarray):
             pose = list(pose)
-            print("Grasp pose: ", pose)
+            self.get_logger().info(f"Grasp pose: {pose}")
             pose = pose[4:] + pose[:4]
             pose = list_to_pose(pose)
+        elif isinstance(pose, SpatialTransform):
+            print(pose.translation)
+            pose = pose_from_spacial_transform(pose)
 
         grasp_pose = pose_stamped_from_pose(pose, frame)
 
-        grasp_pose = self.transform_pose_z(grasp_pose, z_offset=0.07) # GIGA is predicting the position of the finger end, so we need to move it a bit in z direction to the tcp
+        grasp_pose = self.transform_pose_z(grasp_pose, z_offset=0.04) # GIGA is predicting the position of the finger end, so we need to move it a bit in z direction to the tcp
 
-        self.publish_new_frame("grasp_before", grasp_pose)
-
-        grasp_pose2 = copy.deepcopy(grasp_pose)
-
-        try:
-            t_world_2_base_link = self.tf_buffer.lookup_transform(
-                "world", frame, rclpy.time.Time()
-            )
-
-            # transform posestamped from base_link to world using t_world_2_base_link
-            grasp_pose2.pose = tf2_geometry_msgs.do_transform_pose(grasp_pose.pose, t_world_2_base_link)
-            grasp_pose2.header.frame_id = "world"
-
-            print("Grasp pose in world frame: ", grasp_pose2.pose.position)
-            print("Grasp orientation in world frame: ", grasp_pose2.pose.orientation)
-
-        except TransformException as ex:
-            self.get_logger().info(
-                f"Could not transform pose from base_link to world: {ex}"
-            )
-            return
         
-        pregrasp_pose = self.create_pregrasp_pose(copy.deepcopy(grasp_pose2))
+        t_world_2_base_link = self.tf_buffer.lookup_transform(
+            "world", frame, rclpy.time.Time()
+        )
 
-        self.publish_new_frame("grasp_after", grasp_pose2)
+        # transform posestamped from base_link to world using t_world_2_base_link
+        grasp_pose.pose = tf2_geometry_msgs.do_transform_pose(grasp_pose.pose, t_world_2_base_link)
+        grasp_pose.header.frame_id = "world"
+        
+        pregrasp_pose = self.create_pregrasp_pose(copy.deepcopy(grasp_pose))
+
+        self.publish_new_frame("grasp", grasp_pose)
         self.publish_new_frame("pregrasp", pregrasp_pose)
-
-        print("Grasp pose frame ", grasp_pose2.header.frame_id)
-        print("Pregrasp frame ", pregrasp_pose.header.frame_id)
         
         # ask if the user wants to continue
         user_input = input("Press 'c' to continue or any other key to quit: ")
-
         if user_input.lower() == 'c':
 
             self.stop_event.clear()
@@ -502,6 +559,13 @@ class PCDListener(Node):
             state_machine_state = IDLE
             
             while True:
+                if self.stop_event.is_set():
+                    self.stop_event.clear()
+                    self.get_logger().info("Goal cancelled")
+                    self.send_goal(self.camera_ready_pose)
+                    state_machine_state = MOVING_TO_CAMERA_READY
+                    self.get_logger().info("StateMachine switched to MOVING_TO_CAMERA_READY")
+
                 if state_machine_state == IDLE:
                     # Send the goal to move to the pregrasp pose
                     self.send_goal(pregrasp_pose)
@@ -513,24 +577,17 @@ class PCDListener(Node):
                     self.cancel_thread.start()
 
                 elif state_machine_state == MOVING_TO_PREGRASP:
-                    if self.stop_event.is_set():
-                        self.stop_event.clear()
-                        self.get_logger().info("Goal cancelled")
-                        self.send_goal(self.camera_ready_pose)
-                        state_machine_state = MOVING_TO_CAMERA_READY
-                        self.get_logger().info("StateMachine switched to MOVING_TO_CAMERA_READY")
-                    # Wait for the action server to finish
-                    elif self.movement_finished_flag.is_set():
+                    if self.movement_finished_flag.is_set():
                         self.movement_finished_flag.clear()
                         # Wait for manual grasp evaluation
                         time.sleep(2)
-                        if not self.stop_event.is_set():
-                            self.send_goal(grasp_pose2)
-                            # Start the state machine
-                            state_machine_state = MOVING_TO_GRASP
-                            self.get_logger().info("StateMachine switched to MOVING_TO_GRASP")
-                            time.sleep(0.1)
-                    elif self.movement_failed_flag.is_set():
+                        self.send_goal(grasp_pose)
+                        # Start the state machine
+                        state_machine_state = MOVING_TO_GRASP
+                        self.get_logger().info("StateMachine switched to MOVING_TO_GRASP")
+                        time.sleep(0.1)
+
+                    if self.movement_failed_flag.is_set():
                         self.movement_failed_flag.clear()
                         state_machine_state = FAILED
                         self.get_logger().info("StateMachine switched to FAILED")
@@ -540,18 +597,12 @@ class PCDListener(Node):
                     if self.movement_finished_flag.is_set():
                         self.movement_finished_flag.clear()
                         time.sleep(2)
-                        if not self.stop_event.is_set():
-                            # Close the gripper
-                            self.close_gripper()
-                            state_machine_state = GRASPING
-                            self.get_logger().info("StateMachine switched to GRASPING")
-                        else:
-                            self.stop_event.clear()
-                            self.get_logger().info("Goal cancelled")
-                            self.send_goal(self.camera_ready_pose)
-                            state_machine_state = MOVING_TO_CAMERA_READY
-                            self.get_logger().info("StateMachine switched to MOVING_TO_CAMERA_READY")
-                    elif self.movement_failed_flag.is_set():
+                        # Close the gripper
+                        self.close_gripper()
+                        state_machine_state = GRASPING
+                        self.get_logger().info("StateMachine switched to GRASPING")
+                        
+                    if self.movement_failed_flag.is_set():
                         self.movement_failed_flag.clear()
                         state_machine_state = FAILED
                         self.get_logger().info("StateMachine switched to FAILED")
@@ -570,7 +621,6 @@ class PCDListener(Node):
                     if self.gripper_movement_failed_flag.is_set():
                         self.gripper_movement_failed_flag.clear()
                         state_machine_state = FAILED
-                        
                 
                 elif state_machine_state == MOVING_TO_PREGRASP_RETURN:
                     # Wait for the action server to finish
@@ -616,7 +666,7 @@ class PCDListener(Node):
                     if self.movement_finished_flag.is_set():
                         self.movement_finished_flag.clear()
                         state_machine_state = IDLE
-                        self.get_logger().info("State machine finished")
+                        self.get_logger().info("State machine finished, please enter any key to finish the input thread.")
                         break
                     if self.movement_failed_flag.is_set():
                         self.movement_failed_flag.clear()
@@ -625,14 +675,15 @@ class PCDListener(Node):
                 
                 elif state_machine_state == FAILED:
                     self.get_logger().info("State machine failed")
-                    break
+                    return False
+            return True
 
 
     def get_input(self):
         try:
             user_input = input("Press 'c' to cancel: ")
             self.stop_event.set()
-            print(f"\nYou entered: {user_input}")
+            self.get_logger().info(f"\nYou entered: {user_input}")
         except EOFError:
             # Input terminated unexpectedly
             pass
@@ -707,12 +758,10 @@ class PCDListener(Node):
         self._send_goal_future = self._robot_action_client.send_goal_async(
             goal_msg, feedback_callback=self.robot_feedback_callback
         )
-
         self._send_goal_future.add_done_callback(self.robot_goal_response_callback)
 
     def robot_goal_response_callback(self, future):
         self.goal_handle = future.result()
-
         if not self.goal_handle.accepted:
             self.get_logger().info("Goal rejected")
             return
@@ -741,7 +790,7 @@ class PCDListener(Node):
 
         self._gripper_action_client.wait_for_server()
 
-        self.get_logger().info("Sending goal request...")
+        self.get_logger().info("Sending gripper goal request...")
 
         self._send_goal_future = self._gripper_action_client.send_goal_async(
             goal_msg, feedback_callback=self.gripper_feedback_callback
@@ -752,17 +801,17 @@ class PCDListener(Node):
     def gripper_goal_response_callback(self, future):
         goal_handle = future.result()
         if not goal_handle.accepted:
-            self.get_logger().info("Goal rejected :(")
+            self.get_logger().info("Gripper goal rejected")
             return
 
-        self.get_logger().info("Goal accepted :)")
+        self.get_logger().info("Gripper goal accepted")
 
         self._get_result_future = goal_handle.get_result_async()
         self._get_result_future.add_done_callback(self.gripper_get_result_callback)
 
     def gripper_get_result_callback(self, future):
         result = future.result().result
-        self.get_logger().info(f"Result: {result}")
+        self.get_logger().info(f"Gripper result: {result}")
         #if result.success:
         self.gripper_movement_finished_flag.set()
         #else:
@@ -770,7 +819,7 @@ class PCDListener(Node):
 
     def gripper_feedback_callback(self, feedback_msg):
         feedback = feedback_msg.feedback
-        self.get_logger().info(f"Feedback: {feedback}")
+        self.get_logger().info(f"Gripper Feedback: {feedback}")
     
     def open_gripper(self):
         self.get_logger().info("Opening gripper...")
@@ -790,29 +839,42 @@ class PCDListener(Node):
         if self.policy.x_d is None or self.policy.done:
             cmd = np.zeros(6)
         else:
-            x: TransformStamped = self.tf_buffer.lookup_transform(
-            "base_link", "camera_color_optical_frame", rclpy.time.Time()
-            ).transform
-            cmd = self.compute_velocity_cmd(self.policy.x_d, x)
+            t_robot_2_camera = self.tf_buffer.lookup_transform("base_link", "camera_color_optical_frame", rclpy.time.Time()).transform
+            x = SpatialTransform.from_matrix(transform_to_matrix(t_robot_2_camera))
+            print(self.policy.x_d.translation)
+            print(x.translation)
+            cmd = self.compute_velocity_cmd(self.policy.x_d, x, linear_vel=linear_vel, angular_vel=angular_vel)  
+            print(f"Velocity command: {cmd}")
 
-    def compute_velocity_cmd(self, x_d, x):
+        if cmd is not None and not all([cmd[i] == 0 for i in range(6)]):
+
+            pose_robot_2_camera: Pose = transform_to_pose(t_robot_2_camera)
+            print("Before move: ", pose_robot_2_camera.position.x, pose_robot_2_camera.position.y, pose_robot_2_camera.position.z)
+
+            pose_robot_2_camera_next: Pose = pose_from_spacial_transform(self.policy.x_d)
+            self.publish_new_frame("camera_target_view", pose_stamped_from_pose(pose_robot_2_camera_next, "base_link"))
+            pose_robot_2_camera_next = apply_transform_to_pose(pose_robot_2_camera, cmd)  
+            # print("After move: ", pose_robot_2_camera_next.position.x, pose_robot_2_camera_next.position.y, pose_robot_2_camera_next.position.z)     
+
+            try:
+                assert self.change_view(pose_robot_2_camera_next), "Failed to move the robot to the next view."
+            except AssertionError as e:
+                self.get_logger().info(e)
+                self.movement_failed_flag.set()
+                return
+            
+        # send the velocity command to the robot
+
+    def compute_velocity_cmd(self, x_d, x, linear_vel=0.05, angular_vel=1):
         r, theta, phi = cartesian_to_spherical(x.translation - self.view_sphere.center)
-        e_t = x_d.translation - x.translation
-        e_n = (x.translation - self.view_sphere.center) * (self.view_sphere.r - r) / r
-        linear = 1.0 * e_t + 6.0 * (r < self.view_sphere.r) * e_n
+        e_t = x_d.translation - x.translation # translation error
+        e_n = (x.translation - self.view_sphere.center) * (self.view_sphere.r - r) / r # pull the camera towards the sphere
+        linear = 1.0 * e_t + 6.0 * (r < self.view_sphere.r) * e_n # weighted sum of the two errors
         scale = np.linalg.norm(linear) + 1e-6
-        linear *= np.clip(scale, 0.0, self.linear_vel) / scale
-        angular = self.view_sphere.get_view(theta, phi).rotation * x.rotation.inv()
-        angular = 1.0 * angular.as_rotvec()
+        linear *= np.clip(scale, 0.0, linear_vel) / scale # scale the linear velocity
+        angular = self.view_sphere.get_view(theta, phi).rotation * x.rotation.inv() # desired rotation
+        angular = angular_vel * angular.as_rotvec()
         return np.r_[linear, angular]
-
-def create_tsdf(size, resolution, depth_imgs, intrinsic, extrinsics):
-    tsdf = TSDFVolume(size, resolution)
-    for i in range(depth_imgs.shape[0]):
-        extrinsic = Transform.from_matrix(extrinsics[i])
-        tsdf.integrate(depth_imgs[i], intrinsic, extrinsic)
-
-    return tsdf
 
 def main(args=None):
     # Boilerplate code.
