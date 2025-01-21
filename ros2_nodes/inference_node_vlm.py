@@ -76,7 +76,7 @@ class AIRNodeVLM(AIRNode):
                 self.set_eelink("camera_color_optical_frame")
                 # Initialize the search policy
                 self.view_sphere = ViewHalfSphere(self.bbox, min_z_dist)
-                self.policy.activate(self.bbox, self.view_sphere, self.intrinsics, self.pcd_shift)
+                self.policy.activate(self.bbox, self.intrinsics, self.pcd_shift)
                 
                 self.create_timer(1.0 / control_rate, self.send_vel_cmd)
                 self.change_state_to_servo_ctl()
