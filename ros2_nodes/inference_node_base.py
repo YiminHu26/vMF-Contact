@@ -242,10 +242,12 @@ class AIRNode(Node):
         if self.shutdown:
             raise SystemExit
 
-    def process_point_cloud_and_rgbd(self, save_data=False):
+    def process_point_cloud_and_rgbd(self, gaze_point_robot=None, save_data=False, pcd_only=False):
         # TODO: add rgb image processing
         if self.last_point_cloud_msg is None:
             self.get_logger().info("No point cloud message received yet.")
+            if pcd_only:
+                return None, False
             return [None] * 4, False
 
         if self.last_image_msg is None:
@@ -275,7 +277,10 @@ class AIRNode(Node):
         t_robot_2_camera = self.tf_buffer.lookup_transform(
                 "base_link", pcd_msg_camera.header.frame_id, rclpy.time.Time()
             )
-        pcd_numpy_base_link = transform_points(pcd_from_depth, t_robot_2_camera.transform)  
+        pcd_numpy_base_link = transform_points(pcd_from_depth, t_robot_2_camera.transform) 
+
+        if pcd_only:
+            return pcd_numpy_base_link, True 
 
         # remove previous masks
         for file in os.listdir(current_file_folder):
@@ -289,56 +294,16 @@ class AIRNode(Node):
         for file in os.listdir(current_file_folder):
             if file.endswith(".jpg"):
                 os.remove(os.path.join(current_file_folder, file))
-        
-        if self.langsam_model is not None:
-            time_curr = time.time()
-            prompt_input = ""
-            while prompt_input == "":
-                prompt_input = input("Please enter what you would like to grasp: ")
-            prompt_input = prompt_input.split(".")
-            print("Prompt: ", prompt_input)
-        
-            self.masked_pcd_dict = {}
-            # predict masks with lang_sam
-            results = self.langsam_model.predict([Image.fromarray(img)], [". ".join(prompt_input)])
-
-            print(f"Time taken for inference: {time.time() - time_curr}")
-
-            print(f"save images to {current_file_folder}")
-            cv2.imwrite(f"{current_file_folder}/image.jpg", cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
-            
-            # check if there are labels detected
-            labels = results[0]["labels"]
-            if len(labels) == 0:
-                print("No labels detected.")
-                return pcd_numpy_base_link, False
-            # check duplicates in labels, if there are duplicates, mark them with a number
-            labels = mark_duplicates(labels)
-            print("Results: ", labels)
-            print("Scores: ", results[0]["scores"])
-
-            # mask point cloud and image
-            for i, text in enumerate(labels):
-                mask = results[0]["masks"][i].astype(np.uint8)[:, :, None]
-                # mask image and point cloud
-                pcd_masked = pcd_numpy_base_link[mask.reshape(-1) == 1]
-                self.masked_pcd_dict[text] = pcd_masked
-                
-                # save masked image
-                cv2.imwrite(f"{current_file_folder}/{text}.jpg", img[..., ::-1] * mask)
-                
-                # # visualize the masked point cloud
-                # pcd_masked_color = img.reshape(-1, 3)[mask.reshape(-1) == 1]
-                # pcd = o3d.geometry.PointCloud()
-                # pcd.points = o3d.utility.Vector3dVector(pcd_masked)
-                # pcd.colors = o3d.utility.Vector3dVector(pcd_masked_color[:, ::-1] / 255)
-                # o3d.visualization.draw_geometries([pcd], window_name=text)
 
         # save the image, depth, point cloud and camera pose as a dictionary of numpy arrays
         # viszualize the rgbd data
         if save_data:
-            name = f"/home/yitian/data_active_grasp/{cam_pose_robot.position.x}_{cam_pose_robot.position.y}_{cam_pose_robot.position.z}"
-            cv2.imwrite(f"image.jpg", img[..., ::-1])
+            pos = [cam_pose_robot.position.x - gaze_point_robot[0], 
+                   cam_pose_robot.position.y - gaze_point_robot[1], 
+                   cam_pose_robot.position.z - gaze_point_robot[2]]
+            azimuth, elevation = pos_to_azi_elev(pos)
+            name = f"/home/yitian/data_active_grasp/{azimuth}_{elevation}"
+            cv2.imwrite(f"/home/yitian/data_active_grasp/{azimuth}_{elevation}.jpg", img[..., ::-1])
             dict_rgbd = {
                 "image": img,
                 "depth": self.last_depth_msg,
@@ -455,12 +420,13 @@ class AIRNode(Node):
         return True
 
 
-    def execute_grasp(self, grasp_pose, frame = "base_link"):
+    def execute_grasp(self, grasp_pose:Pose, frame = "base_link"):
 
         self.change_state_to_cartesian_ctl()
         self.get_logger().info("Sending goal now...")
 
         # transform posestamped from base_link to world using t_world_2_base_link
+        grasp_pose = pose_stamped_from_pose(grasp_pose, "base_link")
         t_world_2_base_link = self.tf_buffer.lookup_transform("world", frame, rclpy.time.Time())
         grasp_pose.pose = tf2_geometry_msgs.do_transform_pose(grasp_pose.pose, t_world_2_base_link)
         grasp_pose.header.frame_id = "world"
@@ -616,24 +582,27 @@ class AIRNode(Node):
            
     def create_pregrasp_pose(self, grasp_pose: PoseStamped) -> PoseStamped:
         # Create a pregrasp pose by transforming the grasp pose in the z direction
-        pregrasp_pose = self.transform_pose_z(grasp_pose, z_offset=-0.1)
+        pregrasp_pose = PoseStamped()
+        pregrasp_pose.header = grasp_pose.header
+        pregrasp_pose.header.frame_id = "world"
+        pregrasp_pose.pose = self.transform_pose_z(grasp_pose.pose, z_offset=-0.1)
+        # print("Pregrasp pose: ", pregrasp_pose)
         return pregrasp_pose
     
-    def transform_pose_z(self, pose_stamped: PoseStamped, z_offset: float) -> PoseStamped:
+    def transform_pose_z(self, pose: Pose, z_offset: float) -> PoseStamped:
         # Copy the original pose
-        new_pose_stamped = PoseStamped()
-        new_pose_stamped.header = pose_stamped.header
-        new_pose_stamped.pose = pose_stamped.pose
+        new_pose = copy.deepcopy(pose)
 
         # Extract the current pose
-        current_position = pose_stamped.pose.position
-        current_orientation = pose_stamped.pose.orientation
+        current_position = pose.position
+        current_orientation = pose.orientation
 
         # Convert quaternion to rotation matrix
         rotation_matrix = quaternion_matrix([current_orientation.x, 
                                              current_orientation.y, 
                                              current_orientation.z, 
                                              current_orientation.w])
+        print("Rotation matrix: ", rotation_matrix)
 
         # Translation in the local z direction (12 cm = 0.12 meters)
         translation = [0.0, 0.0, z_offset, 1.0]
@@ -642,11 +611,11 @@ class AIRNode(Node):
         transformed_translation = rotation_matrix.dot(translation)
 
         # Update the position with the transformed translation
-        new_pose_stamped.pose.position.x = current_position.x + transformed_translation[0]
-        new_pose_stamped.pose.position.y = current_position.y + transformed_translation[1]
-        new_pose_stamped.pose.position.z = current_position.z + transformed_translation[2]  
+        new_pose.position.x = current_position.x + transformed_translation[0]
+        new_pose.position.y = current_position.y + transformed_translation[1]
+        new_pose.position.z = current_position.z + transformed_translation[2]  
 
-        return new_pose_stamped
+        return new_pose
     
     def publish_new_frame(self, name, pose: PoseStamped):
         t = TransformStamped()

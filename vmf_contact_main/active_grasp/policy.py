@@ -108,7 +108,7 @@ class MultiViewPolicy(Policy):
             self.tsdf.integrate(img, self.intrinsic, x.inv() * self.T_base_task)
 
         scene_cloud = self.tsdf.get_map_cloud()
-        # o3d.visualization.draw_geometries([scene_cloud])
+        o3d.visualization.draw_geometries([scene_cloud])
 
         with Timer("grasp_prediction"):
             tsdf_grid = self.tsdf.get_grid()

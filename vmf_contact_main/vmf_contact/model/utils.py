@@ -59,7 +59,7 @@ class GraspBuffer:
                     (cp2[..., -1] > grasp_height_th)
 
         if pcd_from_prompt is not None:
-            pcd_from_prompt = torch.tensor(pcd_from_prompt, device=self.device, dtype=torch.float32)
+            pcd_from_prompt = torch.tensor(pcd_from_prompt, device=pcds.device, dtype=torch.float32)
             # calculate the distance between the contact points and the prompt points
             dist = torch.cdist(cp, pcd_from_prompt)
             # dist2 = torch.cdist(cp2, pcd_from_prompt)
@@ -68,7 +68,6 @@ class GraspBuffer:
         pcds = pcds * resize + shift
 
         if filter.sum() == 0:
-            print("No valid grasp")
             return False
 
         # print(f"Number of grasps: {filter.sum()}")

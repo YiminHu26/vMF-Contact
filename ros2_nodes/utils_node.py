@@ -237,6 +237,22 @@ def look_at_transformation(gaze_point, robot_position):
 
     return list(quaternion)
 
+def pos_to_azi_elev(position, distance=0.47):
+    # Convert 3D position to azimuth and elevation
+    # position: list or array containing [x, y, z] coordinates
+    # distance: the distance from the camera to the object
+    # return: azimuth in range [-90, 90] and elevation in range [0, 180] in degrees
+
+    x, y, z = position
+
+    # Compute the azimuth angle in the range [-90, 90]
+    azimuth = np.rad2deg(np.arctan2(y, x))
+
+    # Compute the elevation angle (range [0, 180])
+    elevation = np.rad2deg(np.arcsin(z / distance))  # arccos ensures output in [0, 180]
+
+    return azimuth, elevation
+
 def pose_to_transform(pose: Pose, header = None) -> TransformStamped:
     tf = TransformStamped()
     tf.header.frame_id = header
@@ -288,13 +304,5 @@ def pose_stamped_from_pose(pose_in: Pose, frame_id: str) -> PoseStamped:
     pose_stamped.header.frame_id = frame_id
     pose_stamped.pose = pose
     return pose_stamped
-
-def azi_to_pos(azimuth, elevation, distance):
-    azimuth = np.deg2rad(azimuth)
-    elevation = np.deg2rad(elevation)
-    x = distance * np.cos(azimuth) * np.cos(elevation)
-    y = distance * np.sin(azimuth) * np.cos(elevation)
-    z = distance * np.sin(elevation)
-    return [x, y, z]
 
 
