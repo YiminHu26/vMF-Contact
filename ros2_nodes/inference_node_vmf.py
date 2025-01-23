@@ -107,7 +107,6 @@ class AIRNodevMF(AIRNode):
 
     def process_grasp(self, pose):
         pose = list_to_pose(pose)
-        pose = pose_stamped_from_pose(pose, "base_link")
         return pose
 
     def VLM_inference(self, pose: Pose, rgb, d):

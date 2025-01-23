@@ -544,6 +544,7 @@ class vmfContactLightningModule(pl.LightningModule):
         graspness_th=0.3,
         pcd_from_prompt=None,
         convention="xzy",
+        vis=False
         ):
         pcd = torch.tensor(pcd, device=self.device, dtype=torch.float32)
         assert pcd.size(-1) == 3
@@ -582,8 +583,8 @@ class vmfContactLightningModule(pl.LightningModule):
             approach = torch.gather(bin_vectors, 1, bin_score.argmax(dim=-1, keepdim=True)[...,None].expand(-1, -1, 3)).squeeze(1)
             predictions["approach"] = approach
 
-            predictions["grasp_width"] = out["grasp_width"].squeeze(0)
-            predictions["graspness"] = out["graspness"].squeeze(0).sigmoid()
+            predictions["grasp_width"] = out["grasp_width"].float().squeeze(0)
+            predictions["graspness"] = out["graspness"].float().squeeze(0).sigmoid()
 
 
         # update the grasp buffer
@@ -599,9 +600,11 @@ class vmfContactLightningModule(pl.LightningModule):
         if not valid_grasp:
             print("No valid grasp")
             return None
-        self.grasp_buffer.vis_grasps(all=True)
+        print("Get valid grasp")
+        if vis:
+            self.grasp_buffer.vis_grasps(all=True)
         pose_chosen = self.grasp_buffer.get_pose_curr_best(convention=convention, sample_num=sample_num)
         
-        print("Chosen pose", pose_chosen)
+        # print("Chosen pose", pose_chosen)
         return pose_chosen.cpu().numpy()
         

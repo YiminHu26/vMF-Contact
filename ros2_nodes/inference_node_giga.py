@@ -100,7 +100,6 @@ class AIRNodeGIGA(AIRNode):
     
     def process_grasp(self, grasp):
         pose = list_to_pose(grasp.tolist())
-        pose = pose_stamped_from_pose(pose, "base_link")
         pose = self.transform_pose_z(pose, z_offset=0.05) 
         return pose
             

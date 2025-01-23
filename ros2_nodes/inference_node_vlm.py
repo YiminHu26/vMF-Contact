@@ -60,6 +60,7 @@ class AIRNodeVLM(AIRNode):
                 
         self.user_input_thread = threading.Thread(target=self.handle_user_input)
         self.user_input_thread.start()
+        self.set_vel_acc(.2, .1)
   
     
     def handle_user_input(self):
@@ -70,6 +71,8 @@ class AIRNodeVLM(AIRNode):
             # Move to the camera ready pose
             self.change_state_to_cartesian_ctl()
             self.to_camera_ready_pose()
+            # self.generate_trajectory()
+            # self.to_camera_ready_pose()
 
             user_input = input("Enter 's' to start next capture and 'q' to quit: ")
             if user_input == "s":
@@ -79,6 +82,7 @@ class AIRNodeVLM(AIRNode):
                 self.policy.activate(self.bbox, self.intrinsics, self.pcd_shift)
                 
                 self.create_timer(1.0 / control_rate, self.send_vel_cmd)
+                self.create_timer(1.0 / control_rate, self.grasp_inference)
                 self.change_state_to_servo_ctl()
                 self.rate = self.create_rate(policy_rate)
 
@@ -91,7 +95,7 @@ class AIRNodeVLM(AIRNode):
                             self.get_logger().info("No object detected, please try again.")
                             continue
                         self.policy.update(rgb, d, pcd, cam_pose)
-                        self.rate.sleep()
+                        # self.rate.sleep()
 
                 self.rate.sleep()
                 grasp = self.policy.best_grasp
@@ -101,7 +105,8 @@ class AIRNodeVLM(AIRNode):
                 if grasp is not None:
                     self.get_logger().info("Search policy done, start grasp execution.")
                     with Timer("Grasp execution"):
-                        success = self.execute_grasp(grasp.pose)
+                        pose = self.process_grasp(grasp)
+                        success = self.execute_grasp(pose)
                 else:
                     self.get_logger().info("Aborted grasp execution.")
                     success = False
@@ -110,6 +115,12 @@ class AIRNodeVLM(AIRNode):
                 self.change_state_to_cartesian_ctl()
                 break
 
+    def process_grasp(self, grasp):
+        quat = quaternion_from_matrix(grasp)
+        translation = translation_from_matrix(grasp)
+        pose_chosen = np.concatenate([translation, quat])
+        return list_to_pose(pose_chosen)
+    
     def send_vel_cmd(self):
         if self.policy.x_d is None or self.policy.done:
             cmd = np.zeros(6)
@@ -139,9 +150,16 @@ class AIRNodeVLM(AIRNode):
         angular = angular_vel * angular.as_rotvec()
         return np.r_[linear, angular]
     
+    def grasp_inference(self):
+        pcd, identifier = self.process_point_cloud_and_rgbd(pcd_only=True)
+        if not identifier:
+            return
+        self.policy.update_grasp(pcd)
+    
     def generate_trajectory(self):
         traj = []
         gaze_point_robot = [-0.74, 0.1, 0.031] # TODO: remove this line, this is a test for gazing at middle of the desk
+        self.publish_new_frame("gaze_point", list_to_pose_stamped(gaze_point_robot + [0., 0., 0., 1.], "base_link"))
         dist = .47 # np.linalg.norm(np.array(gaze_point_robot) - np.array(pos))
         azi_ele_groups = [
             [(-90, -50), (30, 155)], 
@@ -165,7 +183,7 @@ class AIRNodeVLM(AIRNode):
 
         for t in traj:
             while not self.movement_finished_flag.is_set():
-                camera_data, is_data = self.process_point_cloud_and_rgbd(save_data=True)
+                camera_data, is_data = self.process_point_cloud_and_rgbd(gaze_point_robot, save_data=False)
                 # if is_data:
                 #     pcd = camera_data[0]
                 #     grasp, grasp_criterien = self.agent_inference(pcd)
