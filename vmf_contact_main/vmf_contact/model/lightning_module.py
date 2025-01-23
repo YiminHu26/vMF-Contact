@@ -11,9 +11,7 @@ from openpoints.cpp.chamfer_dist import ChamferDistanceL1
 from openpoints.optim import build_optimizer_from_cfg
 from openpoints.scheduler import build_scheduler_from_cfg
 from .utils import *
-import threading
-import random
-import os
+from tracker.grasp_buffer import GraspBuffer
 
 Batch = Tuple[torch.Tensor, torch.Tensor]
 loss_terms_orientation = {
@@ -582,7 +580,7 @@ class vmfContactLightningModule(pl.LightningModule):
                     )
             approach = torch.gather(bin_vectors, 1, bin_score.argmax(dim=-1, keepdim=True)[...,None].expand(-1, -1, 3)).squeeze(1)
             predictions["approach"] = approach
-
+            predictions["bin_score"] = bin_score
             predictions["grasp_width"] = out["grasp_width"].float().squeeze(0)
             predictions["graspness"] = out["graspness"].float().squeeze(0).sigmoid()
 

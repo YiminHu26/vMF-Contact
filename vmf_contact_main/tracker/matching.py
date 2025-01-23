@@ -7,6 +7,25 @@ from scipy.spatial.distance import cdist
 import torch
 from . import kalman_filter
 import time
+        
+def group_and_sum(A, B, C):
+   # Example input tensors
+    # A: shape (N, K), B: indices to select rows from A, C: group IDs
+    selected_A = A[B]
+
+    # Find unique group IDs and their corresponding indices
+    unique_C, inverse_indices, counts = torch.unique(C, return_inverse=True, return_counts=True)
+
+    # Initialize tensor to store summed values
+    M = unique_C.shape[0]
+    K = A.shape[1]
+    grouped_A = torch.zeros((M, K), dtype=A.dtype)
+
+    # Sum elements based on group ID using scatter_add_
+    grouped_A.scatter_add_(0, inverse_indices.unsqueeze(1).expand(-1, K), selected_A)
+    
+    return grouped_A, unique_C, counts
+
 
 def merge_matches(m1, m2, shape):
     O, P, Q = shape
