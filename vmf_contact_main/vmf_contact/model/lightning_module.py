@@ -542,7 +542,7 @@ class vmfContactLightningModule(pl.LightningModule):
         graspness_th=0.3,
         pcd_from_prompt=None,
         convention="xzy",
-        vis=False
+        vis=True
         ):
         pcd = torch.tensor(pcd, device=self.device, dtype=torch.float32)
         assert pcd.size(-1) == 3

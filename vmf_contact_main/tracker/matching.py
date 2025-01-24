@@ -18,11 +18,13 @@ def group_and_sum(A, B, C):
 
     # Initialize tensor to store summed values
     M = unique_C.shape[0]
-    K = A.shape[1]
-    grouped_A = torch.zeros((M, K), dtype=A.dtype)
+    K = A.shape[1] if len(A.shape) > 1 else 1
+    grouped_A = torch.zeros((M, K), dtype=A.dtype, device=A.device)
 
     # Sum elements based on group ID using scatter_add_
     grouped_A.scatter_add_(0, inverse_indices.unsqueeze(1).expand(-1, K), selected_A)
+
+    counts = counts.unsqueeze(-1)
     
     return grouped_A, unique_C, counts
 
