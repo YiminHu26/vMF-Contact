@@ -60,7 +60,7 @@ class AIRNodeVLM(AIRNode):
                 
         self.user_input_thread = threading.Thread(target=self.handle_user_input)
         self.user_input_thread.start()
-        self.set_vel_acc(.2, .1)
+        self.set_vel_acc(.05, .1)
   
     
     def handle_user_input(self):
@@ -69,20 +69,18 @@ class AIRNodeVLM(AIRNode):
         success = False
         while True:
             # Move to the camera ready pose
-            self.change_state_to_cartesian_ctl()
             self.to_camera_ready_pose()
-            # self.generate_trajectory()
-            # self.to_camera_ready_pose()
+            self.policy.activate(self.bbox, self.intrinsics, self.pcd_shift)
+            self.generate_trajectory(save_data= False, func=self.grasp_inference)
 
             user_input = input("Enter 's' to start next capture and 'q' to quit: ")
             if user_input == "s":
                 self.set_eelink("camera_color_optical_frame")
                 # Initialize the search policy
-                self.view_sphere = ViewHalfSphere(self.bbox, min_z_dist)
-                self.policy.activate(self.bbox, self.intrinsics, self.pcd_shift)
-                
+                                
                 self.create_timer(1.0 / control_rate, self.send_vel_cmd)
                 self.create_timer(1.0 / control_rate, self.grasp_inference)
+                user_input = input("Enter 's' to start next capture and 'q' to quit: ")
                 self.change_state_to_servo_ctl()
                 self.rate = self.create_rate(policy_rate)
 
@@ -150,17 +148,20 @@ class AIRNodeVLM(AIRNode):
         angular = angular_vel * angular.as_rotvec()
         return np.r_[linear, angular]
     
-    def grasp_inference(self):
+    def grasp_inference(self, use_normal_vis=False):
         pcd, identifier = self.process_point_cloud_and_rgbd(pcd_only=True)
         if not identifier:
             return
-        self.policy.update_grasp(pcd)
+        self.policy.update_grasp(pcd, use_normal_vis)
     
-    def generate_trajectory(self):
+    def generate_trajectory(self, func=None, save_data=False):
+        self.change_state_to_cartesian_ctl()
+        self.set_eelink("tcp")
+        self.movement_finished_flag.clear()
         traj = []
-        gaze_point_robot = [-0.74, 0.1, 0.031] # TODO: remove this line, this is a test for gazing at middle of the desk
+        gaze_point_robot = [-0.73, 0.1, 0.031] # TODO: remove this line, this is a test for gazing at middle of the desk
         self.publish_new_frame("gaze_point", list_to_pose_stamped(gaze_point_robot + [0., 0., 0., 1.], "base_link"))
-        dist = .47 # np.linalg.norm(np.array(gaze_point_robot) - np.array(pos))
+        dist = .46 # np.linalg.norm(np.array(gaze_point_robot) - np.array(pos))
         azi_ele_groups = [
             [(-90, -50), (30, 155)], 
             [(-50, 0), (50, 135)],
@@ -170,7 +171,7 @@ class AIRNodeVLM(AIRNode):
         
         round = 0
         for azi_ele in azi_ele_groups:
-            for azimuth in range(*azi_ele[0], 5):
+            for azimuth in range(*azi_ele[0], 20):
                 t = []            
                 ele_range = range(*azi_ele[1]) if round % 2 == 0 else range(*azi_ele[1])[::-1]
                 for elevation in ele_range:
@@ -183,11 +184,12 @@ class AIRNodeVLM(AIRNode):
 
         for t in traj:
             while not self.movement_finished_flag.is_set():
-                camera_data, is_data = self.process_point_cloud_and_rgbd(gaze_point_robot, save_data=False)
+                if func is not None:
+                    func()
                 # if is_data:
                 #     pcd = camera_data[0]
                 #     grasp, grasp_criterien = self.agent_inference(pcd)
-                pass
+            func(use_normal_vis=True)
             print("Sending trajectory")
             self.movement_finished_flag.clear()
             self.send_goal_traj(t)            

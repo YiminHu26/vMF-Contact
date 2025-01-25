@@ -1110,12 +1110,16 @@ def contact_from_quaternion(quaternions, convention="xzy"):
 
 def draw_grasps(cp, cp2, approach, bin_vectors=None, score=None, kappa=None,
                 color=[0.7, 0.1, 0.1], graspline_width=5e-4, finger_length=0.025,
-                arm_length=0.02, sphere_radius=2e-3):
+                arm_length=0.02, sphere_radius=1e-5):
     
     vis_list = []
-    color_max = np.array([1, 1, 1])  # Light red (RGB)
-    color_min = np.array([0, 0, 0])
+    color_max = np.array([0, 0, 1])  # Light red (RGB)
+    color_min = np.array([1, 0, 0])
     cp_half = (cp + cp2) / 2
+
+    # normalize the score
+    if score is not None:
+        score = (score - score.min()) / (score.max() - score.min()) if score.max() != score.min() else score
 
     if cp is not None and cp2 is not None:
         for i, (q, a, app, half_q, half_a) in enumerate(zip(cp, cp2, approach, 
@@ -1144,7 +1148,9 @@ def draw_grasps(cp, cp2, approach, bin_vectors=None, score=None, kappa=None,
 
             # Draw spheres if kappa is provided
             if kappa is not None:
-                sphere = o3d.geometry.TriangleMesh.create_sphere(radius=sphere_radius * kappa[i] / 10)
+                # clip kappa in 0, 500
+                kappa = np.clip(kappa, 0., 500.)
+                sphere = o3d.geometry.TriangleMesh.create_sphere(radius=sphere_radius * kappa[i])
                 sphere.paint_uniform_color(color)
                 sphere.translate(q - app * finger_length)
                 vis_list.append(sphere)

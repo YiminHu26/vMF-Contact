@@ -11,7 +11,7 @@ from openpoints.cpp.chamfer_dist import ChamferDistanceL1
 from openpoints.optim import build_optimizer_from_cfg
 from openpoints.scheduler import build_scheduler_from_cfg
 from .utils import *
-from tracker.grasp_buffer import GraspBuffer
+from .grasp_buffer import GraspBuffer
 
 Batch = Tuple[torch.Tensor, torch.Tensor]
 loss_terms_orientation = {
@@ -538,11 +538,12 @@ class vmfContactLightningModule(pl.LightningModule):
         resize=1.0, 
         sample_num=1,
         grasp_height_th=5e-3,
-        grasp_width_th=0.1,
+        grasp_width_th=0.15,
         graspness_th=0.3,
         pcd_from_prompt=None,
         convention="xzy",
-        vis=True
+        vis=False,
+        use_normal_vis=False
         ):
         pcd = torch.tensor(pcd, device=self.device, dtype=torch.float32)
         assert pcd.size(-1) == 3
@@ -598,9 +599,8 @@ class vmfContactLightningModule(pl.LightningModule):
         if not valid_grasp:
             print("No valid grasp")
             return None
-        print("Get valid grasp")
         if vis:
-            self.grasp_buffer.vis_grasps(all=True)
+            self.grasp_buffer.vis_grasps(use_normal_vis=use_normal_vis)
         pose_chosen = self.grasp_buffer.get_pose_curr_best(convention=convention, sample_num=sample_num)
         
         # print("Chosen pose", pose_chosen)

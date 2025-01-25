@@ -25,7 +25,7 @@ import time
 import cv2
 from .vlm_utils import return_prompt
 
-use_langsam = True
+use_langsam = False
 prompt_input = "baseball"
 
 current_file_folder = os.path.dirname(os.path.abspath(__file__))
@@ -224,7 +224,7 @@ class VLMPolicy(MultiViewPolicy):
 
             self.x_d = nbv
     
-    def update_grasp(self, pcd_raw):
+    def update_grasp(self, pcd_raw, use_normal_vis=False):
         if not self.done and not self.block:
             # TODO: add criteria for grasp execution
             # Process the point cloud
@@ -242,8 +242,9 @@ class VLMPolicy(MultiViewPolicy):
                 self.best_grasp = self.grasp_agent.inference(pcd, 
                                         pcd_from_prompt=None,
                                         shift=self.pcd_shift,
-                                        graspness_th=0.6,
-                                        vis=True)
+                                        graspness_th=0.5,
+                                        vis=True,
+                                        use_normal_vis=use_normal_vis)
             # utilities = gains / np.sum(gains) - costs / np.sum(costs)
             # i = np.argmax(utilities)
             # nbv, gain = views[i], gains[i]

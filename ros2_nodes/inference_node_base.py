@@ -150,8 +150,12 @@ class AIRNode(Node):
     def to_camera_ready_pose(self):
         self.change_state_to_cartesian_ctl()
         self.set_eelink("tcp")
+        self.movement_finished_flag.clear()
         self.send_goal(self.camera_ready_pose)
         self.open_gripper()
+
+        while self.movement_finished_flag.is_set():
+            pass
 
 
     def current_pose_callback(self, msg):

@@ -5,7 +5,6 @@ import lap
 from scipy.spatial.distance import cdist
 
 import torch
-from . import kalman_filter
 import time
         
 def group_and_sum(A, B, C):

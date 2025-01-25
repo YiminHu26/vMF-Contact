@@ -14,10 +14,11 @@ import random
 from vmf_contact.model.utils import *
 from vmf_contact.nn.util import match
 from .matching import *
+import copy
 
 Device = Union[str, torch.device]
 INTEG = True
-normal_o3d_vis = True
+normal_o3d_vis = False
 
 class GraspBuffer:
     def __init__(self, device="cuda:0"):
@@ -32,7 +33,6 @@ class GraspBuffer:
             "bin_score": []}
         self.buffer_size = 0
         self.baseline_fused = None
-        self.approach_fused = None
         self.cp_fused= None
         self.cp2_fused= None
         self.kappa_fused = None
@@ -54,7 +54,7 @@ class GraspBuffer:
                grasp_height_th=5e-3, 
                grasp_width_th=0.1, 
                graspness_th=0.3, 
-               pcd_from_prompt=None):
+               pcd_from_prompt=None):     
         
         if not isinstance(shift, torch.Tensor):
             shift = torch.tensor(shift, device=pcds.device, dtype=torch.float32)
@@ -115,54 +115,55 @@ class GraspBuffer:
                 self.integrate(pcds, baseline, bin_score, cp, cp2, kappa, graspness)
             return True
         
-    def integrate(self, pcds, baseline, bin_score, cp, cp2, kappa, graspness):
+        
+    def integrate(self, pcds, baseline, bin_score, cp, cp2, kappa, graspness, dist_th=0.03):
         if self.baseline_fused is None:
-            self.baseline_fused = baseline
-            self.bin_score_fused = bin_score
-            self.cp_fused= cp
-            self.cp2_fused= cp2
-            self.kappa_fused = kappa
-            self.graspness_fused = graspness
-        else:
-            self.cp_dist = torch.cdist(self.cp_fused, cp)
-            # minmum distance between the current grasp and new discovered grasp over threshold will be integrated
-            new_grasp_idx = torch.where(self.cp_dist.min(0).values > 0.01)[0]
-            # match the grasps lower than the threshold with the old grasps, perform bayesian update
-            matched_idx = torch.where(self.cp_dist.min(0).values <= 0.01)[0]
-            if len(matched_idx) > 0:
-                # Match fused and new contact points
-                pair_ind = match(self.cp_fused, cp)[0]
-                cp_fused_matched = pair_ind[0]
-                cp_matched = pair_ind[1]
-                
-                # Fuse graspness
-                graspness_sum, unique_indices, counts = group_and_sum(graspness, cp_matched, cp_fused_matched)
-                graspness_mean = graspness_sum / counts
-                w = graspness_sum / (self.graspness_fused[unique_indices] + graspness_sum)
-                self.graspness_fused[unique_indices] = self.graspness_fused[unique_indices] + graspness_sum
-                
-                # Fuse contact points
-                cp_all = torch.cat((cp, cp2), dim=1)
-                cp_sum, unique_indices, counts = group_and_sum(cp_all, cp_matched, cp_fused_matched)
-                cp_sum, cp2_sum = cp_sum.split(cp.size(-1), dim=-1)
+            # self fusion
+            self.baseline_fused = copy.deepcopy(baseline)
+            self.bin_score_fused = copy.deepcopy(bin_score)
+            self.cp_fused= copy.deepcopy(cp)
+            self.cp2_fused= copy.deepcopy(cp2)
+            self.kappa_fused = copy.deepcopy(kappa)
+            self.graspness_fused = copy.deepcopy(graspness)
 
-                cp_mean = cp_sum / counts
-                self.cp_fused[unique_indices] = self.cp_fused[unique_indices] * (1-w) + cp_mean * w
-                cp2_sum = cp2_sum / counts
-                self.cp2_fused[unique_indices] = self.cp2_fused[unique_indices] * (1-w) + cp2_sum * w
+        cp_dist = torch.cdist(self.cp_fused, cp)
+        # minmum distance between the current grasp and new discovered grasp over threshold will be integrated
+        new_grasp_idx = torch.where(cp_dist.min(0).values > dist_th)[0]
+        # match the grasps lower than the threshold with the old grasps, perform bayesian update
+        matched_idx = torch.where(cp_dist.min(0).values <= dist_th)[0]
+        if len(matched_idx) > 0:
+            # Match fused and new contact points
+            pair_ind = match(self.cp_fused, cp)[0]
+            cp_fused_matched = pair_ind[0]
+            cp_matched = pair_ind[1]
+            
+            # Fuse graspness
+            graspness_sum, unique_indices, counts = group_and_sum(graspness, cp_matched, cp_fused_matched)
+            graspness_mean = graspness_sum / counts
+            w = graspness_sum / (self.graspness_fused[unique_indices] + graspness_sum)
+            self.graspness_fused[unique_indices] = self.graspness_fused[unique_indices] + graspness_sum
+            
+            # Fuse contact points
+            cp_all = torch.cat((cp, cp2), dim=1)
+            cp_sum, unique_indices, counts = group_and_sum(cp_all, cp_matched, cp_fused_matched)
+            cp_sum, cp2_sum = cp_sum.split(cp.size(-1), dim=-1)
 
-                # Perform Bayesian update on the fused baseline
-                kappa_sum, unique_indices, counts = group_and_sum(kappa, cp_matched, cp_fused_matched)
-                baseline_kappa_sum, unique_indices, counts = group_and_sum(baseline * kappa, cp_matched, cp_fused_matched)
-                self.baseline_fused[unique_indices] = (
-                    self.baseline_fused[unique_indices] * self.kappa_fused[unique_indices] + baseline_kappa_sum
-                ) / (self.kappa_fused[unique_indices] + kappa_sum)
-                self.kappa_fused[unique_indices] += kappa_sum
+            cp_mean = cp_sum / counts
+            self.cp_fused[unique_indices] = self.cp_fused[unique_indices] * (1-w) + cp_mean * w
+            cp2_sum = cp2_sum / counts
+            self.cp2_fused[unique_indices] = self.cp2_fused[unique_indices] * (1-w) + cp2_sum * w
 
-                # Bayesian update on the fused approach using Dirichlet distribution
-                bin_score_sum, unique_indices, counts = group_and_sum(bin_score, cp_matched, cp_fused_matched)
-                self.bin_score_fused[unique_indices] = self.bin_score_fused[unique_indices] + bin_score_sum
-                self.approach_fused = self.approach_from_bin_score(self.bin_score_fused, self.baseline_fused)
+            # Perform Bayesian update on the fused baseline
+            kappa_sum, unique_indices, counts = group_and_sum(kappa, cp_matched, cp_fused_matched)
+            baseline_kappa_sum, unique_indices, counts = group_and_sum(baseline * kappa, cp_matched, cp_fused_matched)
+            self.baseline_fused[unique_indices] = (
+                self.baseline_fused[unique_indices] * self.kappa_fused[unique_indices] + baseline_kappa_sum
+            ) / (self.kappa_fused[unique_indices] + kappa_sum)
+            self.kappa_fused[unique_indices] += kappa_sum
+
+            # Bayesian update on the fused approach using Dirichlet distribution
+            bin_score_sum, unique_indices, counts = group_and_sum(bin_score, cp_matched, cp_fused_matched)
+            self.bin_score_fused[unique_indices] = self.bin_score_fused[unique_indices] + bin_score_sum
                     
             # Integrate new grasp points
             self.cp_fused = torch.cat((self.cp_fused, cp[new_grasp_idx]), dim=0)
@@ -170,7 +171,9 @@ class GraspBuffer:
             self.baseline_fused = torch.cat((self.baseline_fused, baseline[new_grasp_idx]), dim=0)
             self.bin_score_fused = torch.cat((self.bin_score_fused, bin_score[new_grasp_idx]), dim=0)
             self.kappa_fused = torch.cat((self.kappa_fused, kappa[new_grasp_idx]), dim=0)
-            self.graspness_fused = torch.cat((self.graspness_fused, graspness[new_grasp_idx]), dim=0)                
+            self.graspness_fused = torch.cat((self.graspness_fused, graspness[new_grasp_idx]), dim=0)
+
+            print(f"Total grasp number after fusion: {len(self.cp_fused)}")
   
     def get_pcds_all(self):
         return torch.cat(self.buffer_dict["pcds"], dim=0)
@@ -178,7 +181,7 @@ class GraspBuffer:
     def approach_from_bin_score(self, bin_score, baseline):
         bin_num = bin_score.shape[-1]
         bin_vectors = rotate_circle_to_batch_of_vectors(bin_num, baseline)
-        torch.gather(bin_vectors, 1, bin_score.argmax(dim=-1, keepdim=True)[...,None].expand(-1, -1, 3)).squeeze(1)
+        return torch.gather(bin_vectors, 1, bin_score.argmax(dim=-1, keepdim=True)[...,None].expand(-1, -1, 3)).squeeze(1)
     
     def get_grasp_all(self):
         baselines = torch.cat(self.buffer_dict["baselines"], dim=0)
@@ -198,7 +201,18 @@ class GraspBuffer:
         return poses, kappa, graspness
     
     def get_grasp_fused(self):
-        return self.baseline_fused, self.approach_fused, self.cp_fused, self.cp2_fused, self.kappa_fused, self.graspness_fused
+        approach_fused = self.approach_from_bin_score(self.bin_score_fused, self.baseline_fused)
+        filter = self.graspness_fused > self.graspness_fused.max() * 0.2
+        #filter = filter & (self.kappa_fused > self.kappa_fused.max() * 0.5)
+        filter = filter.squeeze(-1)
+
+        baseline = self.baseline_fused[filter]
+        approach = approach_fused[filter]
+        cp = self.cp_fused[filter]
+        cp2 = self.cp2_fused[filter]
+        kappa = self.kappa_fused[filter]
+        graspness = self.graspness_fused[filter]
+        return baseline, approach, cp, cp2, kappa, graspness
     
     def get_pcds_curr(self):
         return self.buffer_dict["pcds"][-1]
@@ -220,24 +234,25 @@ class GraspBuffer:
                                       convention=convention)
         return poses, kappa, graspness
     
-    def set_view(self, center):
+    def set_view(self):
         """Set a specific viewpoint."""
         ctr = self.vis.get_view_control()
 
         # Set camera parameters
-        ctr.set_zoom(1)  # Zoom factor
-        ctr.set_lookat(center)  # Look at center
-        ctr.set_front([-1, 0, 1])  # View direction
+        ctr.set_zoom(.7)  # Zoom factor
+        ctr.set_lookat(self.view_center)  # Look at center
+        ctr.set_front([-5, 0, 1])  # View direction
         ctr.set_up([0, 0, 1])  # Up vector
     
-    def vis_grasps(self, all = False):
+    def vis_grasps(self, use_normal_vis=False):
 
         if len(self.buffer_dict["pcds"]) == 0:
             print("Buffer is empty, no grasp to visualize")
             return
 
         pcd = self.get_pcds_curr()
-        baseline, approach, cp, cp2, kappa, graspness = self.get_grasp_curr()
+        baseline, approach, cp, cp2, kappa, graspness = self.get_grasp_fused() # self.get_grasp_curr()
+                
         vis_list = vis_grasps(
                     samples=pcd,
                     cp=cp,
@@ -249,18 +264,16 @@ class GraspBuffer:
         
         if not hasattr(self, "vis"):
             self.create_vis()
-        
-        if self.vis is None:
+            self.view_center = pcd.mean(0).cpu().numpy()
+            
+        if self.vis is None or use_normal_vis:
             o3d.visualization.draw_geometries(vis_list)
         else:
-            if not all:
-                self.vis.clear_geometries()
-
+            self.set_view()
+            self.vis.clear_geometries()
             for geom in vis_list:
                 self.vis.add_geometry(geom)
             # Update the visualizer
-            center = pcd.mean(0).cpu().numpy()
-            self.set_view(center = center)
             self.vis.poll_events()
             self.vis.update_renderer()            
 

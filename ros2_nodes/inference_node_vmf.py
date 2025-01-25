@@ -190,7 +190,7 @@ class AIRNodevMF(AIRNode):
         pose_chosen = self.agent.inference(pcd, 
                                         pcd_from_prompt=pcd_from_prompt,
                                         shift=self.pcd_shift,
-                                        graspness_th=0.6)
+                                        graspness_th=0.7)
         # Add the new geometry for the current frame
 
         if pose_chosen is None:
