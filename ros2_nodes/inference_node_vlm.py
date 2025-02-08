@@ -23,7 +23,7 @@ O_VOXEL_SIZE = O_SIZE / O_RESOLUTION
 min_z_dist = 0.3
 linear_vel = 0.1
 angular_vel = 1
-control_rate = 30
+control_rate = 60
 policy_rate = 4
 qual_th = 0.8
 
@@ -36,7 +36,7 @@ class AIRNodeVLM(AIRNode):
     def __init__(self):
         super().__init__()
 
-        self.pcd_shift=np.array([-0.86, 0.1, 0.031])
+        self.pcd_shift=np.array([-0.86, 0.1, 0.0])
         self.pcd_center = list_to_pose_stamped(self.pcd_shift.tolist() + [0., 0., 0., 1.], "base_link")
         self.publish_new_frame("center", self.pcd_center)
             
@@ -60,7 +60,7 @@ class AIRNodeVLM(AIRNode):
                 
         self.user_input_thread = threading.Thread(target=self.handle_user_input)
         self.user_input_thread.start()
-        self.set_vel_acc(.05, .1)
+        self.set_vel_acc(.1, .1)
   
     
     def handle_user_input(self):
@@ -71,18 +71,19 @@ class AIRNodeVLM(AIRNode):
             # Move to the camera ready pose
             self.to_camera_ready_pose()
             self.policy.activate(self.bbox, self.intrinsics, self.pcd_shift)
-            self.generate_trajectory(save_data= False, func=self.grasp_inference)
 
-            user_input = input("Enter 's' to start next capture and 'q' to quit: ")
+            # user_input = input("Enter 's' to start next capture and 'q' to quit: ")
+            user_input = "s"
             if user_input == "s":
                 self.set_eelink("camera_color_optical_frame")
                 # Initialize the search policy
                                 
-                self.create_timer(1.0 / control_rate, self.send_vel_cmd)
-                self.create_timer(1.0 / control_rate, self.grasp_inference)
-                user_input = input("Enter 's' to start next capture and 'q' to quit: ")
                 self.change_state_to_servo_ctl()
+                # self.create_timer(1.0 / control_rate, self.send_vel_cmd)
+                self.create_timer(1.0 / control_rate, self.grasp_inference)
                 self.rate = self.create_rate(policy_rate)
+
+                # self.generate_trajectory()
 
                 with Timer("Search time"):
                     self.get_logger().info("Searching for grasp...")
@@ -150,16 +151,15 @@ class AIRNodeVLM(AIRNode):
     
     def grasp_inference(self, use_normal_vis=False):
         pcd, identifier = self.process_point_cloud_and_rgbd(pcd_only=True)
-        if not identifier:
-            return
-        self.policy.update_grasp(pcd, use_normal_vis)
+        if identifier:
+            self.policy.update_grasp(pcd, use_normal_vis)
     
     def generate_trajectory(self, func=None, save_data=False):
         self.change_state_to_cartesian_ctl()
         self.set_eelink("tcp")
         self.movement_finished_flag.clear()
         traj = []
-        gaze_point_robot = [-0.73, 0.1, 0.031] # TODO: remove this line, this is a test for gazing at middle of the desk
+        gaze_point_robot = [-0.73, 0.1, 0.01] # TODO: remove this line, this is a test for gazing at middle of the desk
         self.publish_new_frame("gaze_point", list_to_pose_stamped(gaze_point_robot + [0., 0., 0., 1.], "base_link"))
         dist = .46 # np.linalg.norm(np.array(gaze_point_robot) - np.array(pos))
         azi_ele_groups = [

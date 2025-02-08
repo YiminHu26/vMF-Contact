@@ -597,7 +597,7 @@ class vmfContactLightningModule(pl.LightningModule):
                                  graspness_th, 
                                  pcd_from_prompt)
         if not valid_grasp:
-            print("No valid grasp")
+            # print("No valid grasp")
             return None
         if vis:
             self.grasp_buffer.vis_grasps(use_normal_vis=use_normal_vis)

@@ -22,7 +22,7 @@ class AIRNodevMF(AIRNode):
     def __init__(self):
         super().__init__(use_langsam=False)
 
-        self.pcd_shift=np.array([-0.86, 0.1, 0.031])
+        self.pcd_shift=np.array([-0.86, 0.1, 0.0])
         self.pcd_center = list_to_pose_stamped(self.pcd_shift.tolist() + [0., 0., 0., 1.], "base_link")
         self.publish_new_frame("center", self.pcd_center)
 
@@ -124,7 +124,7 @@ class AIRNodevMF(AIRNode):
         # TODO: add vlm inference
         # camera_pos_increment, gaze_point = self.vlm_agent(rgb, d)
         # camera_pos = camera_pos + camera_pos_increment * 0.1
-        gaze_point_robot = [-0.74, 0.1, 0.031] # TODO: remove this line, this is a test for gazing at middle of the desk
+        gaze_point_robot = [-0.74, 0.1, 0.01] # TODO: remove this line, this is a test for gazing at middle of the desk
 
         quaternion = look_at_transformation(gaze_point_robot, pos)
         

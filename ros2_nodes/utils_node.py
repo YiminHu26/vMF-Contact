@@ -3,6 +3,8 @@ from geometry_msgs.msg import Pose, PoseStamped, Transform, TransformStamped
 from tf_transformations import quaternion_from_matrix, quaternion_matrix, translation_from_matrix
 from vmf_contact_main.active_grasp.spatial import SpatialTransform
 from scipy.spatial.transform import Rotation as R
+import numpy as np
+import torch
 
 # Function to mark duplicates with a number
 def mark_duplicates(labels):
@@ -199,7 +201,6 @@ def azi_to_pos(azimuth, elevation, distance):
     z = distance * np.sin(elevation)
     return [x, y, z]
 
-    
 def look_at_transformation(gaze_point, robot_position):
     """
     Compute a transformation matrix that aligns the robot's orientation to look at a gaze point.

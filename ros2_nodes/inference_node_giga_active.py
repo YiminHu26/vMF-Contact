@@ -38,7 +38,7 @@ class AIRNodeGIGAActive(AIRNode):
         super().__init__()
         self.set_vel_acc(.5, .1)
         
-        self.pcd_shift=np.array([-0.86, 0.1, 0.03])
+        self.pcd_shift=np.array([-0.86, 0.1, 0.0])
         self.pcd_center = list_to_pose_stamped(self.pcd_shift.tolist() + [0., 0., 0., 1.], "base_link")
         self.publish_new_frame("center", self.pcd_center)
 

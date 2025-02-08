@@ -144,7 +144,7 @@ class AIRNode(Node):
         # self.camera_ready_pose = list_to_pose_stamped([-0.435, -0.572, 1.492, 0.995, 0.009, 0.005, 0.100], "world") # small finger
         self.drop_off_pose: PoseStamped = list_to_pose_stamped([0.15, -0.75, 1.3, 1.0, 0.0, 0.0, 0.0], "world")
 
-        self.langsam_model = LangSAM() if use_langsam else None
+        self.langsam_model = LangSAM(sam_type="sam2.1-hiera-large") if use_langsam else None
 
     
     def to_camera_ready_pose(self):
