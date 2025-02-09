@@ -1,15 +1,16 @@
 import numpy as np
 import open3d as o3d
 import math
+from ..bbox import AABBox
 
 class SceneObject:
     def __init__(self, pcd, center, bbox_dims, bbox_3d, label, adjectives):
         """
-        :param center: 物体中心点坐标，例如 (x, y, z)
-        :param bbox_dims: bbox 的尺寸 (长, 宽, 高)
-        :param bbox_3d: 3D bounding box，8 个角点列表
-        :param label: 物体类别标签
-        :param adjectives: 描述物体的形容词列表（例如颜色、大小、特性等）
+        :param center: object center (N, 3)
+        :param bbox_dims: bbox size (length, width, height)
+        :param bbox_3d: 3D bounding box corners, shape (8, 3)
+        :param label: object label string
+        :param adjectives: list of descriptive adjectives (List[str])
         """
         self.center = center
         self.pcd = pcd
@@ -17,8 +18,6 @@ class SceneObject:
         self.bbox_3d = bbox_3d
         self.label = label
         self.adjectives = adjectives
-        # 生成一个唯一的标识符，用 label 加上第一个形容词（例如颜色），方便区分同一类别中不同属性的实例
-        # 如果没有形容词，也可直接用 label
         self.instance_id = f"{label}_{adjectives[0]}" if adjectives else label
     def __str__(self):
         return (
@@ -31,8 +30,7 @@ class SceneObject:
     def print_adj(self):
         print(f"Adjectives: {self.adjectives}\n")
 
-
-def compute_oriented_bounding_box(pcd, label="Unknown", adjectives=[], lower_percentile=2, upper_percentile=98):
+def compute_oriented_bounding_box(pcd, label="Unknown", adjectives=[], lower_percentile=4, upper_percentile=96):
     """
     Computes a SceneObject with an Oriented Bounding Box (OBB) from a point cloud.
 

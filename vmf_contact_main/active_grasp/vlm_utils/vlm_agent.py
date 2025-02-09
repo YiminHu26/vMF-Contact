@@ -22,28 +22,37 @@ else:
     from openai import OpenAI
 
 use_langsam = True
-target_object = "tennis ball"
 
 current_file_folder = os.path.dirname(os.path.abspath(__file__))
 O_SIZE = .3
 min_pixels = 256 * 28 * 28
 max_pixels = 2560 * 28 * 28
 
-def mark_duplicates(labels):
-    label_count = {}
-    result = []
-    
-    for label in labels:
-        if label in label_count:
-            label_count[label] += 1
-        else:
-            label_count[label] = 1
-        result.append(f"{label} {label_count[label]}")
-    return result
+def agent_process(img_queue, 
+                  depth_queue, 
+                  pose_queue, 
+                  pcd_queue, 
+                  relations_queue,
+                  scene_objects_queue,
+                  target_object
+                  ):
+    agent = VLMAgent(target_object)
+    while True:
+        if img_queue.empty() or depth_queue.empty() or pose_queue.empty() or pcd_queue.empty():
+            continue
+        print("[VLM]: Processing image in agent process")
+        img = img_queue.get()
+        depth = depth_queue.get()
+        pose = pose_queue.get()
+        pcd = pcd_queue.get()
+        relations, scene_objects = agent(img, depth, pose, pcd)
+        relations_queue.put(relations)
+        scene_objects_queue.put(scene_objects)
+        print("[VLM]: Done processing image in agent process")
 
 class VLMAgent():
-    def __init__(self):
-        self.langsam = LangSAM(sam_type="sam2.1_hiera_large") if use_langsam else None
+    def __init__(self, target_object = "tennis ball"):
+        self.langsam_model = LangSAM(sam_type="sam2.1_hiera_large") if use_langsam else None
         if not remote_api:
             self.processor = AutoProcessor.from_pretrained(
                 "Qwen/Qwen2-VL-7B-Instruct-AWQ", min_pixels=min_pixels, max_pixels=max_pixels
@@ -112,7 +121,6 @@ class VLMAgent():
             )[0]
 
         print(f"[VLM] Time taken: {time.time() - curr_time}")
-        print("[VLM]: Output text: ", output_text)
         
         descri_langsam_dict = {}
         
@@ -185,13 +193,26 @@ class VLMAgent():
         return np.array(direction)
 
     def generate_langsam(self, pcd, img, descri_langsam_dict):
+
+        def mark_duplicates(labels):
+            label_count = {}
+            result = []
+            
+            for label in labels:
+                if label in label_count:
+                    label_count[label] += 1
+                else:
+                    label_count[label] = 1
+                result.append(f"{label} {label_count[label]}")
+            return result
+        
         # Process the prompt point cloud
         time_curr = time.time()
     
         descri_langsam_key_list = list(descri_langsam_dict.keys())
 
         # predict masks with lang_sam
-        results = self.langsam.predict([Image.fromarray(img)], [". ".join(descri_langsam_key_list)])
+        results = self.langsam_model.predict([Image.fromarray(img)], [". ".join(descri_langsam_key_list)])
 
         print(f"[LangSAM] Time taken: {time.time() - time_curr}")
                 
@@ -206,16 +227,21 @@ class VLMAgent():
         print("[VLM]: Results: ", labels)
         print("[VLM]: Scores: ", results[0]["scores"])
 
-        scene_objects = []
+        scene_objects = {}
         vis_list = []
         # mask point cloud and image
         for i, text in enumerate(labels):
+            if not "1" in text:
+                print(f"[VLM]: Skipping {text} as it is not the first instance.")
+                continue
+    
             adj_list = None
-            for key in descri_langsam_dict:
-                if key in text:
+            for key in descri_langsam_dict.keys():
+                if all(k in text for k in key.split(" ")):
                     adj_list = descri_langsam_dict[key]
                     break
             if adj_list is None:
+                print(f"[VLM]: No adjectives found for {text}.")
                 continue
 
             mask = results[0]["masks"][i].astype(np.uint8)[:, :, None]
@@ -223,13 +249,18 @@ class VLMAgent():
             # mask image and point cloud
             pcd_masked = pcd[mask.reshape(-1) == 1]
 
+            
             # filter out noises out of range:
-            pcd_masked = pcd_masked[(pcd_masked[:, 2] > 0.03) & (pcd_masked[:, 2] < 0.45)]
+            pcd_masked = pcd_masked[(pcd_masked[:, 2] > 0.03) & (pcd_masked[:, 2] < 0.3)]
+
+            if len(pcd_masked) == 0:
+                print(f"[VLM]: No points in the masked point cloud for {text}.")
+                continue
 
             # compile scene object
             scene_object = compute_oriented_bounding_box(pcd_masked, label=text, adjectives=adj_list)
-            scene_objects.append(scene_object)
-            print(str(scene_object)) 
+            scene_objects[text] = scene_object
+            # print(str(scene_object)) 
 
             # visualize the scene object
             vis_list += visualize_pcd_with_obb(pcd_masked, scene_object.bbox_3d)
@@ -238,7 +269,7 @@ class VLMAgent():
         
         o3d.visualization.draw_geometries(vis_list)
                     
-        pcd_from_prompt = [scene_object.pcd for scene_object in scene_objects]
+        pcd_from_prompt = [scene_object.pcd for scene_object in scene_objects.values()]
         pcd_from_prompt = np.concatenate(pcd_from_prompt, axis=0)
 
         return pcd_from_prompt, scene_objects
@@ -260,6 +291,8 @@ class VLMAgent():
         pcd_from_prompt, scene_objects = self.generate_langsam(pcd_raw, img, descri_langsam_dict)
 
         # self.target_object = input("Please enter the target object: ")
-        relations = compile_relation(scene_objects, self.target_object)
+        relations = compile_relation(scene_objects)
+
+        return relations, scene_objects
 
 

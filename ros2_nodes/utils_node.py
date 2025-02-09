@@ -201,43 +201,6 @@ def azi_to_pos(azimuth, elevation, distance):
     z = distance * np.sin(elevation)
     return [x, y, z]
 
-def look_at_transformation(gaze_point, robot_position):
-    """
-    Compute a transformation matrix that aligns the robot's orientation to look at a gaze point.
-    
-    :param gaze_point: (x, y, z) coordinates of the gaze target in the world frame
-    :param robot_position: (x, y, z) coordinates of the robot's reference point (e.g., end-effector or camera)
-    :return: (position, quaternion) representing the pose
-    """
-    gaze_point = np.array(gaze_point)
-    robot_position = np.array(robot_position)
-
-    # Compute direction vector from robot to gaze point
-    direction = gaze_point - robot_position
-    direction /= np.linalg.norm(direction)  # Normalize
-
-    # Define a reference up vector (assuming Z-up world frame)
-    left_vector = np.array([0, -1, 0])
-
-    # Compute right vector (cross product of up and direction)
-    up_vector = np.cross(left_vector, direction)
-    up_vector /= np.linalg.norm(up_vector)
-
-    # Compute new up vector (orthogonal to both direction and right)
-    right_vector = np.cross(up_vector, direction)
-
-    # Construct rotation matrix
-    rotation_matrix = np.eye(4)
-    rotation_matrix[:3, 0] = right_vector
-    rotation_matrix[:3, 1] = up_vector
-    rotation_matrix[:3, 2] = direction
-    rotation_matrix[:3, 3] = robot_position  # Set translation
-
-    # Convert rotation matrix to quaternion
-    quaternion = quaternion_from_matrix(rotation_matrix)
-
-    return list(quaternion)
-
 def pos_to_azi_elev(position, distance=0.47):
     # Convert 3D position to azimuth and elevation
     # position: list or array containing [x, y, z] coordinates
