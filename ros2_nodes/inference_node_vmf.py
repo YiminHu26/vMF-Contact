@@ -29,6 +29,7 @@ class AIRNodevMF(AIRNode):
         self.user_input_thread = threading.Thread(target=self.handle_user_input)
         self.user_input_thread.start()
         self.agent = main_module(parse_args_from_yaml(current_file_folder + "/../vmf_contact_main/config.yaml"), learning=False)
+        self.set_vel_acc(.3, .1)
 
     
     def process_point_cloud(self):
@@ -90,7 +91,7 @@ class AIRNodevMF(AIRNode):
             self.to_camera_ready_pose()
             user_input = input("Enter 's' to start next capture and 'q' to quit: ")
             if user_input == "s":
-                (pcd, rgb, d, cam_pose), identifier = self.process_point_cloud_and_rgbd()
+                (pcd, rgb, d, cam_pose, _), identifier = self.process_point_cloud_and_rgbd()
                 if not identifier:
                     print("No object detected, please try again.")
                     continue
@@ -107,35 +108,6 @@ class AIRNodevMF(AIRNode):
 
     def process_grasp(self, pose):
         pose = list_to_pose(pose)
-        return pose
-
-    def VLM_inference(self, pose: Pose, rgb, d):
-        # Extract the current pose
-        current_position = pose.position
-        current_orientation = pose.orientation
-
-        # Convert quaternion to rotation matrix
-        rotation_matrix = quaternion_matrix([current_orientation.x, 
-                                             current_orientation.y, 
-                                             current_orientation.z, 
-                                             current_orientation.w])
-        pos = [current_position.x, current_position.y, current_position.z]
-
-        # TODO: add vlm inference
-        # camera_pos_increment, gaze_point = self.vlm_agent(rgb, d)
-        # camera_pos = camera_pos + camera_pos_increment * 0.1
-        gaze_point_robot = [-0.74, 0.1, 0.01] # TODO: remove this line, this is a test for gazing at middle of the desk
-
-        quaternion = look_at_transformation(gaze_point_robot, pos)
-        
-        pose.position.x = pos[0]
-        pose.position.y = pos[1]
-        pose.position.z = pos[2]
-        pose.orientation.x = quaternion[0]
-        pose.orientation.y = quaternion[1]
-        pose.orientation.z = quaternion[2]
-        pose.orientation.w = quaternion[3]
-
         return pose
     
     def agent_inference(self, pcd_raw):

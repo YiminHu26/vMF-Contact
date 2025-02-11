@@ -26,7 +26,6 @@ linear_vel = 0.1
 angular_vel = 1
 control_rate = 60
 policy_rate = 4
-qual_th = 0.8
 
 target_object = "red cup"
 
@@ -71,14 +70,12 @@ class AIRNodeVLM(AIRNode):
 
         self.get_camera_info()
         self.to_camera_ready_pose()
-        # self.generate_trajectory(func=partial(self.process_point_cloud_and_rgbd, save_data=True))
         success = False
         while True:
             # Move to the camera ready pose
             self.policy.activate(self.bbox, 
-                                 self.intrinsics, 
                                  self.pcd_shift, 
-                                 target_object=target_object,
+                                 target_object = target_object,
                                  min_z_dist = min_z_dist)
 
             # user_input = input("Enter 's' to start next capture and 'q' to quit: ")
@@ -92,17 +89,15 @@ class AIRNodeVLM(AIRNode):
                 self.create_timer(1.0 / control_rate, self.grasp_inference)
                 self.rate = self.create_rate(policy_rate)
 
-                # self.generate_trajectory()
-
                 with Timer("Search time"):
                     self.get_logger().info("Searching for grasp...")
             
                     while not self.policy.done:
-                        (pcd, rgb, d, cam_pose), identifier = self.process_point_cloud_and_rgbd()
+                        (pcd, rgb, d, cam_pose, rotation_angle), identifier = self.process_point_cloud_and_rgbd()
                         if not identifier:
                             self.get_logger().info("No object detected, please try again.")
                             continue
-                        self.policy.update(rgb, d, pcd, cam_pose)
+                        self.policy.update(rgb, d, pcd, cam_pose, -rotation_angle)
                         # self.rate.sleep()
 
                 self.rate.sleep()
@@ -162,46 +157,6 @@ class AIRNodeVLM(AIRNode):
         pcd, identifier = self.process_point_cloud_and_rgbd(pcd_only=True)
         if identifier:
             self.policy.update_grasp(pcd, use_normal_vis)
-    
-    def generate_trajectory(self, func=None):
-        self.change_state_to_cartesian_ctl()
-        self.set_eelink("tcp")
-        self.gaze_point_robot = [-0.73, 0.1, 0.1] # TODO: remove this line, this is a test for gazing at middle of the desk
-        self.publish_new_frame("gaze_point", list_to_pose_stamped(self.gaze_point_robot + [0., 0., 0., 1.], "base_link"))
-        self.dist = min_z_dist # np.linalg.norm(np.array(gaze_point_robot) - np.array(pos))
-        azi_ele_groups = [
-            [(-90, -50), (40, 145)], 
-            [(-50, 0), (50, 135)],
-            [(0, 50), (50, 135)],
-            [(50, 90), (40, 145)]
-            ]
-        
-        round = 0
-        traj = []
-        self.movement_finished_flag.clear()
-        for azi_ele in azi_ele_groups:
-            for azimuth in range(*azi_ele[0], 10):
-                t = []            
-                ele_range = range(*azi_ele[1]) if round % 2 == 0 else range(*azi_ele[1])[::-1]
-                for elevation in ele_range:
-                    pos = azi_to_pos(azimuth, elevation, self.dist)
-                    pos =[pos[i] + self.gaze_point_robot[i] for i in range(3)]
-                    quaternion = look_at_transformation(self.gaze_point_robot, pos)
-                    t.append(pos + quaternion)
-                round += 1
-                traj.append(self.create_trajectory(t))
-
-        for t in traj:
-            self.movement_finished_flag.clear()
-            self.send_goal_traj(t) 
-            while not self.movement_finished_flag.is_set():
-                if func is not None:
-                    func()
-                # if is_data:
-                #     pcd = camera_data[0]
-                #     grasp, grasp_criterien = self.agent_inference(pcd)
-            print("Sending trajectory")
-                       
 
 def main(args=None):
     # Boilerplate code.

@@ -51,8 +51,9 @@ MOVING_TO_PREGRASP_RETURN = "moving_to_pregrasp2"
 MOVING_TO_CAMERA_READY = "moving_to_camera_ready"
 FAILED = "failed"
 MOVING = "moving"
+gaze_point_robot = [-0.73, 0.1, 0.1]
 
-obj_list = ["yellow bottle", "white bottle", "white dominos box", "red cup", "orange cordless screwdriver"]
+obj_list = ["yellow bottle", "white bottle", "white dominos box", "white cup", "red cheezit box", "red apple", "cordless screwdriver"]
 
 class AIRNode(Node):
 
@@ -155,10 +156,8 @@ class AIRNode(Node):
         self.set_eelink("tcp")
         self.movement_finished_flag.clear()
         self.send_goal(self.camera_ready_pose)
-        self.open_gripper()
 
-        while self.movement_finished_flag.is_set():
-            print("Waiting for the robot to reach the camera ready pose...")
+        while not self.movement_finished_flag.is_set():
             continue
 
 
@@ -297,119 +296,18 @@ class AIRNode(Node):
         
         # transformation to pose
         cam_pose_robot = transform_to_pose(t_robot_2_camera.transform)
-        
-        if self.langsam_model is not None:
-            _, scene_objects = self.generate_langsam(pcd_numpy_base_link, img)
-            bbox_center_dict = {obj.instance_id: obj.center for obj in scene_objects}
-            bbox_corners_dict = {obj.instance_id: obj.bbox_3d for obj in scene_objects}
-        
-        # save the image, depth, point cloud and camera pose as a dictionary of numpy arrays
-        # viszualize the rgbd data
-        if save_data:
-            assert hasattr(self, "gaze_point_robot"), "Please set the gaze point first."
-            pos = [cam_pose_robot.position.x - self.gaze_point_robot[0], 
-                   cam_pose_robot.position.y - self.gaze_point_robot[1], 
-                   cam_pose_robot.position.z - self.gaze_point_robot[2]]
-            azimuth, elevation = pos_to_azi_elev(pos)
-            name = f"/home/yitian/data_active_grasp/{azimuth}_{elevation}"
-            cv2.imwrite(f"/home/yitian/data_active_grasp/{azimuth}_{elevation}.jpg", img[..., ::-1])
-            dict_rgbd = {
-                "image": img,
-                "depth": self.last_depth_msg,
-                "pcd": pcd_numpy_base_link,
-                "cam_pose": [cam_pose_robot.position.x, 
-                            cam_pose_robot.position.y, 
-                            cam_pose_robot.position.z,
-                            cam_pose_robot.orientation.x, 
-                            cam_pose_robot.orientation.y, 
-                            cam_pose_robot.orientation.z, 
-                            cam_pose_robot.orientation.w],
-                "bbox_center_dict": bbox_center_dict if self.langsam_model is not None else None,
-                "bbox_corners_dict": bbox_corners_dict if self.langsam_model is not None else None
-            }
-            np.savez(f"{name}.npz", **dict_rgbd)
+
+        pos = [cam_pose_robot.position.x - gaze_point_robot[0], 
+                   cam_pose_robot.position.y - gaze_point_robot[1], 
+                   cam_pose_robot.position.z - gaze_point_robot[2]]
+        azimuth, elevation = pos_to_azi_elev(pos)
 
         return (pcd_numpy_base_link, 
                 self.last_image_msg, 
                 self.last_depth_msg.astype(np.float32) / 1000.0, 
-                cam_pose_robot), True
-
-    def generate_langsam(self, pcd, img):
-
-        def mark_duplicates(labels):
-            label_count = {}
-            result = []
-            
-            for label in labels:
-                if label in label_count:
-                    label_count[label] += 1
-                else:
-                    label_count[label] = 1
-                result.append(f"{label} {label_count[label]}")
-            return result
-        
-        # Process the prompt point cloud
-        time_curr = time.time()
-    
-        # predict masks with lang_sam
-        results = self.langsam_model.predict([Image.fromarray(img)], [". ".join(obj_list)])
-
-        print(f"[LangSAM] Time taken: {time.time() - time_curr}")
-                
-        # check if there are labels detected
-        labels = results[0]["labels"]
-        if len(labels) == 0:
-            print("[VLM]: No labels detected.")
-            return pcd
-        # check duplicates in labels, if there are duplicates, mark them with a number
-        labels = mark_duplicates(labels)
-
-        print("[VLM]: Results: ", labels)
-        print("[VLM]: Scores: ", results[0]["scores"])
-
-        vis_list = []
-        scene_objects = []
-        # mask point cloud and image
-        for i, text in enumerate(labels):
-
-            if "1" not in text:
-                continue
-
-            mask = results[0]["masks"][i].astype(np.uint8)[:, :, None]
-
-            # mask image and point cloud
-            pcd_masked = pcd[mask.reshape(-1) == 1]
-
-            # filter out noises out of range:
-            pcd_masked = pcd_masked[(pcd_masked[:, 2] > 0.01) & (pcd_masked[:, 2] < self.dist)]
-            #if hasattr(self, "gaze_point_robot"):
-            pcd_masked_dist_to_gaze = np.linalg.norm(pcd_masked[:, :3] - self.gaze_point_robot, axis=1)
-            pcd_masked = pcd_masked[pcd_masked_dist_to_gaze < self.dist - 0.3]
-
-            # compile scene object
-            if pcd_masked.shape[0] == 0:
-                print(f"Object: {text} is out of range.")
-                continue
-            try:
-                scene_object = compute_oriented_bounding_box(pcd_masked, label=text)
-            except:
-                print(f"Object: {text} failed to compute OBB.")
-                print(pcd_masked)
-                continue
-            scene_objects.append(scene_object)
-            print(f"Object: {scene_object.instance_id}. Center: {scene_object.center}") 
-
-            # visualize the scene object
-            vis_list += visualize_pcd_with_obb(pcd_masked, scene_object.bbox_3d)
-            # save masked image
-            # cv2.imwrite(f"{current_file_folder}/{text}.jpg", img[..., ::-1] * mask)
-        
-        # o3d.visualization.draw_geometries(vis_list)
-                
-        pcd_from_prompt = [obj.pcd for obj in scene_objects]
-
-        return pcd_from_prompt, scene_objects         
-    
+                cam_pose_robot, 
+                azimuth), True
+       
     def handle_user_input(self):
         raise NotImplementedError
 
@@ -736,20 +634,20 @@ class AIRNode(Node):
         self._send_goal_future.add_done_callback(self.robot_goal_response_callback)
 
     def send_goal_traj(self, goal_path):
-            goal_msg = MoveCartesianPath.Goal()
-            goal_msg.poses = goal_path
+        goal_msg = MoveCartesianPath.Goal()
+        goal_msg.poses = goal_path
 
-            self.get_logger().info("Waiting for action server...")
+        self.get_logger().info("Waiting for action server...")
 
-            self._robot_action_client_traj.wait_for_server()
+        self._robot_action_client_traj.wait_for_server()
 
-            self.get_logger().info("Sending goal request...")
+        self.get_logger().info("Sending goal request...")
 
-            self._send_goal_future = self._robot_action_client_traj.send_goal_async(
-                goal_msg, feedback_callback=self.robot_feedback_callback 
-            )
+        self._send_goal_future = self._robot_action_client_traj.send_goal_async(
+            goal_msg, feedback_callback=self.robot_feedback_callback 
+        )
 
-            self._send_goal_future.add_done_callback(self.robot_goal_response_callback)
+        self._send_goal_future.add_done_callback(self.robot_goal_response_callback)
 
 
     def set_eelink(self, eelink_name: str):
@@ -1045,10 +943,8 @@ class AIRNode(Node):
     def create_trajectory(self, data):
             path = []
             for p in data:
-                rosp = PoseStamped()
                 cam_pose_to_robot = series_to_pose(p)
                 tcp_pose_to_world, _ = self.camera_robot_pose_to_tcp_world_pose(cam_pose_to_robot)
-                rosp.header.frame_id = "world"
                 path.append(tcp_pose_to_world)
             return path
 

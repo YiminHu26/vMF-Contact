@@ -209,10 +209,10 @@ def pos_to_azi_elev(position, distance=0.47):
 
     x, y, z = position
 
-    # Compute the azimuth angle in the range [-90, 90]
+    # Compute the azimuth angle in the range [-180, 180]
     azimuth = np.rad2deg(np.arctan2(y, x))
 
-    # Compute the elevation angle (range [0, 180])
+    # Compute the elevation angle (range [0, 90])
     elevation = np.rad2deg(np.arcsin(z / distance))  # arccos ensures output in [0, 180]
 
     return azimuth, elevation

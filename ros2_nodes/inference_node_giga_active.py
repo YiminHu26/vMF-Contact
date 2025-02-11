@@ -86,7 +86,7 @@ class AIRNodeGIGAActive(AIRNode):
                     self.get_logger().info("Searching for grasp...")
             
                     while not self.policy.done:
-                        (pcd, rgb, d, cam_pose), identifier = self.process_point_cloud_and_rgbd()
+                        (pcd, rgb, d, cam_pose, _), identifier = self.process_point_cloud_and_rgbd()
                         if not identifier:
                             self.get_logger().info("No object detected, please try again.")
                             continue
