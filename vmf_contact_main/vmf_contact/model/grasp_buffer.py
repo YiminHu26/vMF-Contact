@@ -275,11 +275,17 @@ class GraspBuffer:
                                       convention=convention)
         return poses, kappa, graspness
     
-    def get_grasp_fused(self):
+    def get_grasp_fused(self, pcd_from_prompt=None):
         approach_fused = self.approach_from_bin_score(self.bin_score_fused, self.baseline_fused)
         filter = self.graspness_fused > self.graspness_fused.max() * 0.1
         #filter = filter & (self.kappa_fused > self.kappa_fused.max() * 0.5)
         filter = filter.squeeze(-1)
+
+        if pcd_from_prompt is not None:
+            pcd_from_prompt = torch.tensor(pcd_from_prompt, device=self.cp_fused.device, dtype=torch.float32)
+            # calculate the distance between the contact points and the prompt points
+            dist = torch.cdist(self.cp_fused, pcd_from_prompt)
+            filter = filter & (dist.min(1).values < 0.01)
 
         baseline = self.baseline_fused[filter]
         approach = approach_fused[filter]
@@ -303,6 +309,15 @@ class GraspBuffer:
     
     def get_pose_curr(self, convention="xzy"):
         baseline, approach, cp, grasp_width, kappa, graspness = self.get_grasp_curr()
+        cp2 = cp + grasp_width * baseline
+        poses = rotation_from_contact(baseline=baseline, 
+                                      approach=approach, 
+                                      translation=(cp+cp2)/2,
+                                      convention=convention)
+        return poses, kappa, graspness
+    
+    def get_pose_fused(self, convention="xzy", pcd_from_prompt=None):
+        baseline, approach, cp, grasp_width, kappa, graspness = self.get_grasp_fused(pcd_from_prompt)
         cp2 = cp + grasp_width * baseline
         poses = rotation_from_contact(baseline=baseline, 
                                       approach=approach, 
@@ -361,6 +376,29 @@ class GraspBuffer:
             return None
         
         poses, kappa, graspness = self.get_pose_curr(convention)
+        
+        score = kappa if sort_by == "kappa" else graspness
+        
+        #sort poses by criterion
+        sample_num = min(sample_num, poses.size(0))
+        poses_candidates = poses[torch.argsort(score, descending=True)][:sample_num]
+
+        #randomly sample 1 poses
+        pose_chosen = poses_candidates[random.randint(0, sample_num-1)].squeeze(0)
+        return pose_chosen
+    
+    def get_pose_fused_best(self, 
+                            convention="xzy", 
+                            sort_by="kappa", 
+                            sample_num=1,
+                            pcd_from_prompt=None
+                            ):
+
+        if len(self.buffer_dict["pcds"]) == 0:
+            print("Buffer is empty, no grasp to choose")
+            return None
+        
+        poses, kappa, graspness = self.get_pose_fused(convention, pcd_from_prompt)
         
         score = kappa if sort_by == "kappa" else graspness
         

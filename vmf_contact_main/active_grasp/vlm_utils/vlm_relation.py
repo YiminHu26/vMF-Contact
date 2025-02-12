@@ -99,7 +99,7 @@ class SceneConstraints:
                         relations.append(f"is between {inst_a.label} and {inst_b.label}")
         return relations
 
-def compile_relation(scene_objects, bbox_expansion=0.03):
+def compile_relation(scene_objects, bbox_expansion=0.0):
     relation_dict = {}
     
     for curr_obj in scene_objects.values():

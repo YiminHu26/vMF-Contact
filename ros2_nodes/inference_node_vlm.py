@@ -8,6 +8,7 @@ from .inference_node_base import *
 
 from vmf_contact_main.camera_utils import *
 from vmf_contact_main.active_grasp.policy import make, registry
+from vmf_contact_main.active_grasp.vlm_policy import VLMPolicy
 from vmf_contact_main.active_grasp.bbox import AABBox
 from vmf_contact_main.active_grasp.spatial import *
 from vmf_contact_main.active_grasp.timer import Timer
@@ -39,16 +40,16 @@ class AIRNodeVLM(AIRNode):
         super().__init__()
 
         self.camera_ready_pose = list_to_pose_stamped([-0.370, -0.592, 1.224, 0.942, 0.007, -0.005, 0.336], "world")
-        self.pcd_shift=np.array([-0.86, 0.1, 0.0])
-        self.pcd_center = list_to_pose_stamped(self.pcd_shift.tolist() + [0., 0., 0., 1.], "base_link")
-        self.publish_new_frame("center", self.pcd_center)
+        self.gaze_point_robot=np.array([-0.86, 0.1, 0.0])
+        pcd_center = list_to_pose_stamped(self.gaze_point_robot.tolist() + [0., 0., 0., 1.], "base_link")
+        self.publish_new_frame("center", pcd_center)
             
-        lower = [self.pcd_center.pose.position.x - O_SIZE / 2, 
-                    self.pcd_center.pose.position.y - O_SIZE / 2, 
-                    self.pcd_center.pose.position.z]
-        upper = [self.pcd_center.pose.position.x + O_SIZE / 2,
-                self.pcd_center.pose.position.y + O_SIZE / 2,
-                self.pcd_center.pose.position.z + 0.09]
+        lower = [pcd_center.pose.position.x - O_SIZE / 2, 
+                    pcd_center.pose.position.y - O_SIZE / 2, 
+                    pcd_center.pose.position.z]
+        upper = [pcd_center.pose.position.x + O_SIZE / 2,
+                pcd_center.pose.position.y + O_SIZE / 2,
+                pcd_center.pose.position.z + 0.09]
         
         middle = (np.array(lower) + np.array(upper)) / 2
         self.box_center = list_to_pose_stamped(middle.tolist() + [0., 0., 0., 1.], "base_link")
@@ -59,7 +60,7 @@ class AIRNodeVLM(AIRNode):
         # Active search setting
         parser = create_parser()
         args = parser.parse_args()
-        self.policy = make(args.policy)
+        self.policy:VLMPolicy = make(args.policy)
                 
         self.user_input_thread = threading.Thread(target=self.handle_user_input)
         self.user_input_thread.start()
@@ -70,11 +71,11 @@ class AIRNodeVLM(AIRNode):
 
         self.get_camera_info()
         self.to_camera_ready_pose()
-        success = False
+        success = clear = False
         while True:
             # Move to the camera ready pose
             self.policy.activate(self.bbox, 
-                                 self.pcd_shift, 
+                                 self.gaze_point_robot, 
                                  target_object = target_object,
                                  min_z_dist = min_z_dist)
 
@@ -85,34 +86,40 @@ class AIRNodeVLM(AIRNode):
                 # Initialize the search policy
                                 
                 self.change_state_to_servo_ctl()
-                # self.create_timer(1.0 / control_rate, self.send_vel_cmd)
+                self.create_timer(1.0 / control_rate, self.send_vel_cmd)
                 self.create_timer(1.0 / control_rate, self.grasp_inference)
                 self.rate = self.create_rate(policy_rate)
 
-                with Timer("Search time"):
-                    self.get_logger().info("Searching for grasp...")
-            
-                    while not self.policy.done:
-                        (pcd, rgb, d, cam_pose, rotation_angle), identifier = self.process_point_cloud_and_rgbd()
-                        if not identifier:
-                            self.get_logger().info("No object detected, please try again.")
-                            continue
-                        self.policy.update(rgb, d, pcd, cam_pose, -rotation_angle)
-                        # self.rate.sleep()
+                while not clear:
+                    with Timer("Search time"):
+                        self.get_logger().info("Searching for grasp...")
+                
+                        while not self.policy.done:
+                            (pcd, rgb, d, cam_pose, rotation_angle), identifier = self.process_point_cloud_and_rgbd()
+                            if not identifier:
+                                self.get_logger().info("No object detected, please try again.")
+                                continue
+                            self.policy.update(rgb, d, pcd, cam_pose, -rotation_angle)
+                            # self.rate.sleep()
 
-                self.rate.sleep()
-                grasp = self.policy.best_grasp
-                self.change_state_to_cartesian_ctl()
-                self.set_eelink("tcp")
+                    self.rate.sleep()
+                    grasp = self.policy.best_grasp
+                    self.change_state_to_cartesian_ctl()
+                    self.set_eelink("tcp")
 
-                if grasp is not None:
-                    self.get_logger().info("Search policy done, start grasp execution.")
-                    with Timer("Grasp execution"):
-                        pose = self.process_grasp(grasp)
-                        success = self.execute_grasp(pose)
-                else:
-                    self.get_logger().info("Aborted grasp execution.")
-                    success = False
+                    if grasp is not None:
+                        self.get_logger().info("Search policy done, start grasp execution.")
+                        with Timer("Grasp execution"):
+                            pose = self.process_grasp(grasp)
+                            success = self.execute_grasp(pose)
+                    else:
+                        self.get_logger().info("Aborted grasp execution.")
+                        success = False
+                    
+                    if success:
+                        self.get_logger().info("Grasp successful.")
+                        clear = self.policy.remove_current_target()
+
             elif user_input == "q":
                 self.shutdown = True
                 self.change_state_to_cartesian_ctl()
@@ -130,11 +137,12 @@ class AIRNodeVLM(AIRNode):
         else:
             t_robot_2_camera = self.tf_buffer.lookup_transform("base_link", "camera_color_optical_frame", rclpy.time.Time()).transform
             x = SpatialTransform.from_matrix(transform_to_matrix(t_robot_2_camera))
-            cmd = self.compute_velocity_cmd(self.policy.x_d, x, linear_vel=linear_vel, angular_vel=angular_vel) 
+            cmd = self.compute_velocity_cmd(x, linear_vel=linear_vel, angular_vel=angular_vel) 
 
             # publish the next view
-            pose_robot_2_camera_next: Pose = pose_from_spacial_transform(self.policy.x_d)
-            self.publish_new_frame("camera_target_view", pose_stamped_from_pose(pose_robot_2_camera_next, "base_link"))
+            if self.policy.nbv_field is None and self.policy.x_d is not None:
+                pose_robot_2_camera_next: Pose = pose_from_spacial_transform(self.policy.x_d)
+                self.publish_new_frame("camera_target_view", pose_stamped_from_pose(pose_robot_2_camera_next, "base_link"))
 
             # publish the view velocity
             pose_robot_2_camera: Pose = transform_to_pose(t_robot_2_camera)
@@ -142,11 +150,23 @@ class AIRNodeVLM(AIRNode):
             self.publish_new_frame(f"camera_view_velocity", pose_stamped_from_pose(pose_robot_2_camera_next, "base_link")) 
         self.send_twist_cmd(cmd)
 
-    def compute_velocity_cmd(self, x_d, x, linear_vel=0.05, angular_vel=1):
-        r, theta, phi = cartesian_to_spherical(x.translation - self.view_sphere.center)
-        e_t = x_d.translation - x.translation # translation error
-        e_n = (x.translation - self.view_sphere.center) * (self.view_sphere.r - r) / r # pull the camera towards the sphere
+    def compute_velocity_cmd(self, x, linear_vel=0.05, angular_vel=1):
+        if len(self.target_objects_label) == 0: 
+            view_focus = self.view_sphere.center 
+        else: 
+            view_focus = self.target_objects[self.target_objects_label[-1]].center
+        _, theta, phi = cartesian_to_spherical(x.translation - view_focus)
+
+        if self.nbv_field is not None:
+            e_t = self.nbv_field(x.translation)
+        else:
+            e_t = self.policy.x_d.translation - x.translation # translation error
+        
+        r = np.linalg.norm(x.translation - self.gaze_point_robot)
+        e_n = (x.translation - view_focus) * (self.view_sphere.r - r) / r # pull the camera towards the sphere
+
         linear = 1.0 * e_t + 6.0 * (r < self.view_sphere.r) * e_n # weighted sum of the two errors
+
         scale = np.linalg.norm(linear) + 1e-6
         linear *= np.clip(scale, 0.0, linear_vel) / scale # scale the linear velocity
         angular = self.view_sphere.get_view(theta, phi).rotation * x.rotation.inv() # desired rotation
@@ -157,6 +177,23 @@ class AIRNodeVLM(AIRNode):
         pcd, identifier = self.process_point_cloud_and_rgbd(pcd_only=True)
         if identifier:
             self.policy.update_grasp(pcd, use_normal_vis)
+    
+    @property
+    def view_sphere(self):
+        return self.policy.view_sphere
+    
+    @property
+    def target_objects(self):
+        return self.policy.target_objects
+    
+    @property
+    def target_objects_label(self):
+        return self.policy.target_objects_label
+    
+    @property
+    def nbv_field(self):
+        return self.policy.nbv_field
+    
 
 def main(args=None):
     # Boilerplate code.

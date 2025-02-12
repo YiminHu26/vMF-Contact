@@ -2,6 +2,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 
+truncate=np.pi/6
+# set random seed for reproducibility
+np.random.seed(42)
 # 1. Generate two random points **inside** the sphere
 def generate_random_points_in_sphere(S, R_s, num_points=10):
     """
@@ -9,7 +12,7 @@ def generate_random_points_in_sphere(S, R_s, num_points=10):
     """
     theta = np.random.uniform(0, np.pi/2, num_points)  # Polar angle
     phi = np.random.uniform(0, 2 * np.pi, num_points)  # Azimuthal angle
-    R_s = np.random.uniform(0, 1, num_points)*R_s  # Random radius
+    R_s = np.random.uniform(0, 1, num_points)*R_s *0.6 # Random radius
 
     X = S[0] + R_s * np.sin(theta) * np.cos(phi)
     Y = S[1] + R_s * np.sin(theta) * np.sin(phi)
@@ -23,7 +26,7 @@ def generate_random_points_on_sphere(S, R_s, num_points=10):
     """
     Generates uniform points uniformly distributed on the sphere surface.
     """
-    theta = np.linspace(0, np.pi, num_points)  # Polar angle
+    theta = np.linspace(0, np.pi/2 - truncate, num_points)  # Polar angle
     phi = np.linspace(0, 2 * np.pi, num_points)  # Azimuthal angle
 
     sphere_points = []
@@ -69,6 +72,9 @@ def query_tangent_vector(S, R_s, P1, P2, P_q):
     """
     Queries the tangent vector at a given point on the sphere.
     """
+    if isinstance(P_q, list):
+        P_q = np.array(P_q)
+
     # Ensure P_q is on the sphere (project if necessary)
     P_q = S + R_s * (P_q - S) / np.linalg.norm(P_q - S)
 
@@ -87,74 +93,127 @@ def query_tangent_vector(S, R_s, P1, P2, P_q):
     # Normalize to maintain consistent vector lengths
     tangent_vector = tangent_vector / np.linalg.norm(tangent_vector)
 
-    # Compute the projection of S onto the plane perpendicular to P1 P2
-    P_mid = (P1 + P2) / 2
-    dist_S_plane = np.dot(P_mid - S, N)
-    alpha = (dist_S_plane + R_s) / R_s 
+    # # Compute the projection of S onto the plane perpendicular to P1 P2
+    # P_mid = (P1 + P2) / 2
+    # dist_S_plane = np.dot(P_mid - S, N)
+    # alpha = (dist_S_plane + R_s) / R_s 
 
-    # Get the starting pole of the field
-    P_pole = S - R_s * N
+    # # Get the starting pole of the field
+    # P_pole = S - R_s * N
 
     # Compute the strength of the field
-    theta = np.arccos(np.dot(P_pole - S, P_q - S) / R_s**2) / np.pi # normalize to [0, 1]
-    strength = 1 - theta**alpha
-    return tangent_vector * strength
+    # theta = np.arccos(np.dot(P_pole - S, P_q - S) / R_s**2) / np.pi # normalize to [0, 1]
+    # strength = 1 - theta**alpha
 
-# 5. Plot the **sphere, intersection circle, and tangent vector field**
-def plot_query_tangent_vectors(S, R_s, num_queries=20, Ps_num=3):
+    beta = np.dot(P2 - P1, P_q - P1) / (np.linalg.norm(P2 - P1) * np.linalg.norm(P_q - P1))
+    beta = np.arccos(beta) / np.pi
+
+    elevation = np.abs(np.arcsin(radial_vector[2]))
+
+    upward = generate_upward_tangent_vector(S, P_q) 
+    if elevation < truncate and np.dot(tangent_vector, upward) < 0:
+        # rejection on upward tangent vector
+        tangent_vector = tangent_vector - np.dot(tangent_vector, upward) * upward
+    return tangent_vector * beta # + generate_upward_tangent_vector(S, P_q) 
+
+def generate_upward_tangent_vector(S, P_q):
     """
-    Plots a 3D sphere and multiple query points with their tangent vectors.
+    Generates a tangent vector that always points upwards relative to the sphere.
+    """
+    radial_vector = P_q - S
+    radial_vector /= np.linalg.norm(radial_vector) + 1e-6
+    
+    up_vector = np.array([0, 0, 1])  # Global upward direction
+    tangent_vector = np.cross(np.cross(radial_vector, up_vector), radial_vector)
+    tangent_vector /= np.linalg.norm(tangent_vector) + 1e-6
+    return tangent_vector
+
+
+import matplotlib.animation as animation
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.animation as animation
+
+def animate_query_tangent_vectors(S, R_s, num_queries=20, Ps_num=5, steps=100, dt=0.1):
+    """
+    Animates query points moving along the velocity field on the sphere.
     """
     # Generate P1 and P2 inside the sphere
     Ps = generate_random_points_in_sphere(S, R_s, Ps_num)
 
     # Generate multiple query points on the sphere
     query_points = generate_random_points_on_sphere(S, R_s, num_queries)
+    query_points = np.array(query_points)
     
-    # Compute tangent vectors at each query point
-    P0 =  Ps[1] + (Ps[2] - Ps[1]) * 0.4 # Ps[0] #  
-    tangent_vectors = 0
-    for P in Ps[1:]:
-        tangent_vectors += np.array([query_tangent_vector(S, R_s, P, P0, P_q) for P_q in query_points])
+    # Select reference points for computing the field
+    P0 =  Ps[1] + (Ps[2] - Ps[1]) * 0.5 #  Ps[0] #  
 
     fig = plt.figure(figsize=(8, 8))
     ax = fig.add_subplot(111, projection='3d')
-
-    # Plot the sphere surface
-    u = np.linspace(0, np.pi, 30)
+    
+    # Plot sphere surface
+    u = np.linspace(0, np.pi / 2, 30)
     v = np.linspace(0, 2 * np.pi, 30)
     X = S[0] + R_s * np.outer(np.sin(u), np.cos(v))
     Y = S[1] + R_s * np.outer(np.sin(u), np.sin(v))
     Z = S[2] + R_s * np.outer(np.cos(u), np.ones_like(v))
     ax.plot_surface(X, Y, Z, color='lightblue', alpha=0.3)
+    
+    # Initialize scatter plot for moving points
+    points_plot, = ax.plot([], [], [], 'ro', label="Query Points")
 
     # Plot P1, P2, and the query points
     ax.scatter(*P0, color='green', label="P1", s=200)
     for i, P in enumerate(Ps[1:]):
         ax.scatter(*P, color='blue', label=f"P{i+2}", s=200)
     ax.scatter(*np.array(query_points).T, color='purple', label="Query Points", s=20)
-
+    
+    # Compute tangent vectors at each query point
+    tangent_vectors = 0
+    for P in Ps[1:]:
+        tangent_vectors += np.array([query_tangent_vector(S, R_s, P, P0, P_q) for P_q in query_points])
+    
+    tangent_vectors /= np.linalg.norm(tangent_vectors, axis=1)[:, None]
+    
     # Plot tangent vectors
     query_points = np.array(query_points)
     ax.quiver(query_points[:, 0], query_points[:, 1], query_points[:, 2],
               tangent_vectors[:, 0], tangent_vectors[:, 1], tangent_vectors[:, 2],
               length=1, color='red', label="Tangent Vectors")
+    
+    def update(frame):
+        nonlocal query_points
+        
+        # Recompute tangent vectors at current positions
+        tangent_vectors = np.zeros_like(query_points)
+        for P in Ps[1:]:
+            tangent_vectors += np.array([query_tangent_vector(S, R_s, P, P0, P_q) for P_q in query_points])
+        tangent_vectors /= np.linalg.norm(tangent_vectors, axis=1)[:, None] + 1e-6
+        
+        # Compute angular displacement
+        query_points += dt * tangent_vectors
 
+        # project back to the sphere
+        query_points = S + R_s * (query_points - S) / np.linalg.norm(query_points - S, axis=1)[:, None]
+        
+        # Update plot data
+        points_plot.set_data(query_points[:, 0], query_points[:, 1])
+        points_plot.set_3d_properties(query_points[:, 2])
+        return points_plot,
+    
     ax.set_xlabel("X")
     ax.set_ylabel("Y")
     ax.set_zlabel("Z")
     ax.legend()
-    ax.set_title("Query Tangent Vectors on the Sphere")
-
-    # Ensure equal aspect ratio for all axes
-    ax.set_box_aspect([1, 1, 1])
+    ax.set_title("Query Tangent Vectors Motion on the Sphere")
+    
     max_range = R_s * 1.2
     ax.set_xlim(S[0] - max_range, S[0] + max_range)
     ax.set_ylim(S[1] - max_range, S[1] + max_range)
-    ax.set_zlim(S[2] - max_range, S[2] + max_range)
-
+    ax.set_zlim(S[2] - max_range + 1.6, S[2] + max_range)
+    
+    ani = animation.FuncAnimation(fig, update, frames=steps, interval=50, blit=False)
     plt.show()
-
 
 if __name__ == "__main__":
     # Example Usage
@@ -162,4 +221,5 @@ if __name__ == "__main__":
     R_s = 5  # Sphere Radius
 
     # Plot the results
-    plot_query_tangent_vectors(S, R_s)
+    #plot_query_tangent_vectors(S, R_s)
+    animate_query_tangent_vectors(S, R_s)

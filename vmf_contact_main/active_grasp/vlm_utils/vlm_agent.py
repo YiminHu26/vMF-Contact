@@ -85,7 +85,6 @@ class VLMAgent():
             depth = depth.astype(np.uint8)
             depth = np.clip(depth, 0, 255)
             depth = depth[:, :, None].repeat(3, axis=2)
-                
         curr_time = time.time()
 
         # print("[VLM]: Message history: ", self.message_history)
@@ -171,7 +170,8 @@ class VLMAgent():
 
         # sort labels by score
         scores = results[0]["scores"]
-        labels = [label for _, label in sorted(zip(scores, labels), reverse=True)]
+        labels = [label for _, label in sorted(zip(scores, labels), reverse=True, key=lambda pair: pair[0])]
+        masks = [mask for _, mask in sorted(zip(scores, results[0]["masks"]), reverse=True, key=lambda pair: pair[0])]
         scores = sorted(scores, reverse=True)
 
         # check duplicates in labels, if there are duplicates, mark them with a number
@@ -182,7 +182,12 @@ class VLMAgent():
 
         scene_objects = {}
         vis_list = []
-        # mask point cloud and image
+        # Remove previous image
+        if os.path.exists(f"{current_file_folder}/"):
+            for file in os.listdir(f"{current_file_folder}/"):
+                if file.endswith(".jpg"):
+                    os.remove(f"{current_file_folder}/{file}")
+
         for i, text in enumerate(labels):
             # Only the first instance of the object is considered
             if not "1" in text:
@@ -190,11 +195,11 @@ class VLMAgent():
                 continue
 
             # mask image and point cloud
-            mask = results[0]["masks"][i].astype(np.uint8)[:, :, None]
+            mask = masks[i].astype(np.uint8)[:, :, None]
             pcd_masked = pcd[mask.reshape(-1) == 1]
             
             # filter out noises out of range:
-            pcd_masked = pcd_masked[(pcd_masked[:, 2] > 0.03) & (pcd_masked[:, 2] < 0.3)]
+            pcd_masked = pcd_masked[(pcd_masked[:, 2] > 0.02) & (pcd_masked[:, 2] < 0.3)]
             if len(pcd_masked) == 0:
                 print(f"[VLM]: No valid points in the masked point cloud for {text}.")
                 continue

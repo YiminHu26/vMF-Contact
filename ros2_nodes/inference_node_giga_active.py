@@ -116,7 +116,7 @@ class AIRNodeGIGAActive(AIRNode):
         rotation = swap_z(grasp.pose.rotation.as_quat())
         pose = grasp.pose.translation.tolist() + rotation.tolist()
         pose = list_to_pose(pose)
-        grasp_pose = self.transform_pose_z(grasp_pose, z_offset=0.05) # GIGA is predicting the position of the finger end, so we need to move it a bit in z direction to the tcp
+        grasp_pose = self.transform_pose_z(pose, z_offset=0.05) # GIGA is predicting the position of the finger end, so we need to move it a bit in z direction to the tcp
         return grasp_pose
         
     def send_vel_cmd(self):
