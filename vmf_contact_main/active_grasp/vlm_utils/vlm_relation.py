@@ -1,7 +1,7 @@
-import math
+from .img_bbox_utils import SceneObject
 import numpy as np
 from typing import List
-from .bbox_langsam import SceneObject, obb_collision_expanded
+from .img_bbox_utils import obb_collision_expanded
 import random
 
 class SceneConstraints:
@@ -22,17 +22,27 @@ class SceneConstraints:
         corners = inst.bbox_3d
         return max(corners, key=lambda corner: corner[2])
     
-    def is_below(self, inst_0, inst_1, ratio = 0.8) -> bool:
+    def _get_lowest_point(self, inst):
+        """Extracts the lowest point of the given instance."""
+        corners = inst.bbox_3d
+        return min(corners, key=lambda corner: corner[2])
+    
+    def is_below(self, inst_0, inst_1, ratio_xy = 0.5, height_threshold = 0.032) -> bool:
         """Checks if inst_0 is below inst_1 within the defined threshold."""
         c0, c1 = self._get_coordinates(inst_0), self._get_coordinates(inst_1)
-        dx, dy, dz = c1 - c0
+        dx, dy = c1[:2] - c0[:2]
+        dz = self._get_highest_point(inst_0)[2] - self._get_lowest_point(inst_1)[2]
         dxy = np.sqrt(dx**2 + dy**2)
         l0, w0, h0 = inst_0.bbox_dims
         l1, w1, h1 = inst_1.bbox_dims
-        height_threshold = (h0 + h1) / 2 * ratio
-        wl_threshold = (max(w0, w1) + max(l0, l1)) / 2 * ratio
-        return dz > height_threshold and dxy < wl_threshold
-    
+        wl_threshold = (max(w0, w1) + max(l0, l1)) / 2 * ratio_xy
+        if dz < height_threshold and dxy < wl_threshold:
+            print(f"Below relation between: {inst_0.label}, {inst_1.label}:")
+            print(f"z differece: {dz}, xy difference: {dxy}")
+            print(f"wl threshold: {wl_threshold}")
+            return True
+        return False
+        
     def _check_relative_position_xy(self, inst_0, inst_1) -> bool:
         """Generalized method to check relative positioning based on x and z directionality."""
         c0, c1 = self._get_coordinates(inst_0), self._get_coordinates(inst_1)
@@ -76,6 +86,7 @@ class SceneConstraints:
         if self.is_below(inst_0, inst_1):
             relations.append(f"{inst_0.label} is below {inst_1.label}")
             return relations
+        
         # left right
         relation = "left" if self.is_left(inst_0, inst_1) else "right"
         # low high
@@ -99,29 +110,26 @@ class SceneConstraints:
                         relations.append(f"is between {inst_a.label} and {inst_b.label}")
         return relations
 
-def compile_relation(scene_objects, bbox_expansion=0.0):
-    relation_dict = {}
-    
-    for curr_obj in scene_objects.values():
-        relation_dict[curr_obj.label] = []
+
+def compile_relation(scene_objects: List[SceneObject], 
+                     bbox_expansion=0.0):
+    for curr_obj in scene_objects:
+        curr_obj.relations = []
         related_objs = []
-        for obj in scene_objects.values():
+
+        for obj in scene_objects:
             # bboxes of the two objects are colliding 
             if obj.label != curr_obj.label and obb_collision_expanded(curr_obj.bbox_3d, obj.bbox_3d, bbox_expansion):
                 related_objs.append(obj)
 
-        # If no related objects are found, return an error message
         if not len(related_objs):
-            # print(f"Can't find {curr_obj.label} related objects")
             continue
         
         checker = SceneConstraints(threshold=0.05)
         for robj in related_objs:
-            relation_dict[curr_obj.label] += checker.identify_relation(curr_obj, robj)
-        relation_dict[curr_obj.label] += checker.identify_between_relations(curr_obj, related_objs)
+            curr_obj.relations += checker.identify_relation(curr_obj, robj)
+        curr_obj.relations += checker.identify_between_relations(curr_obj, related_objs)
 
-        # print(f"It: {relation_dict[curr_obj.label]}")
-
-    return relation_dict
+        # print(f"[VLM]: Relations for {curr_obj.label}: {curr_obj.relations}")
 
         

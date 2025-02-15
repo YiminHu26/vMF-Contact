@@ -1,10 +1,11 @@
 import numpy as np
 import open3d as o3d
-import math
-from ..bbox import AABBox
+import cv2
+import base64
+from io import BytesIO
 
 class SceneObject:
-    def __init__(self, pcd, center, bbox_dims, bbox_3d, label, adjectives):
+    def __init__(self, pcd, label, adjectives=None, relations=[]):
         """
         :param center: object center (N, 3)
         :param bbox_dims: bbox size (length, width, height)
@@ -12,13 +13,13 @@ class SceneObject:
         :param label: object label string
         :param adjectives: list of descriptive adjectives (List[str])
         """
-        self.center = center
         self.pcd = pcd
-        self.bbox_dims = bbox_dims
-        self.bbox_3d = bbox_3d
         self.label = label
         self.adjectives = adjectives
-        self.instance_id = f"{label}_{adjectives[0]}" if adjectives else label
+        self.relations = relations
+        self.instance_id = f"{adjectives[0]} {label}" if adjectives is not None else label
+        self.center, self.bbox_dims, self.bbox_3d = compute_oriented_bounding_box(pcd)
+        
     def __str__(self):
         return (
                 # f"Instance ID: {self.instance_id}\n"
@@ -27,10 +28,28 @@ class SceneObject:
                 f"BBox size: (length, width, height): {self.bbox_dims}\n"
                 f"3D BBox: {self.bbox_3d}\n"
                 f"Adjectives: {self.adjectives}\n")
-    def print_adj(self):
-        print(f"Adjectives: {self.adjectives}\n")
+    
+    def return_dict(self):
+        return{
+            "bbox_center": np.round(self.center * np.array([-1, 1, 1]), 3).tolist(),
+            "bbox_corners": np.round(self.bbox_3d * np.array([-1, 1, 1]), 3).tolist(),
+            "bbox_lwh": np.round(self.bbox_dims, 3).tolist()
+        }
 
-def compute_oriented_bounding_box(pcd, label="Unknown", adjectives=[], lower_percentile=4, upper_percentile=96):
+def format_bbox_data(bbox_center_dict, bbox_corners_dict, bbox_lwh_dict):
+    formatted_data = {}
+
+    for obj_name in bbox_center_dict.keys():
+        formatted_data[obj_name] = {
+            "bbox_center": np.round(bbox_center_dict[obj_name] * np.array([-1, 1, 1]), 3).tolist(),  # 翻转 X 轴
+            "bbox_corners": np.round(bbox_corners_dict[obj_name] * np.array([-1, 1, 1]), 3).tolist(),  # 翻转 X 轴
+            "bbox_lwh": np.round(bbox_lwh_dict[obj_name], 3).tolist()
+        }
+    return formatted_data
+
+####################################################################################################
+
+def compute_oriented_bounding_box(pcd, lower_percentile=4, upper_percentile=96):
     """
     Computes a SceneObject with an Oriented Bounding Box (OBB) from a point cloud.
 
@@ -88,7 +107,7 @@ def compute_oriented_bounding_box(pcd, label="Unknown", adjectives=[], lower_per
     obb_corners = (corner_offsets @ rotation_matrix.T) + mean
 
     # Create and return a SceneObject instance
-    return SceneObject(pcd=pcd, center=obb_center_world, bbox_dims=bbox_dims, bbox_3d=obb_corners, label=label, adjectives=adjectives)
+    return obb_center_world, bbox_dims, obb_corners
 
 
 def visualize_pcd_with_obb(pcd, obb_corners):
@@ -220,4 +239,68 @@ def obb_collision_expanded(obb1:SceneObject, obb2:SceneObject, expansion_distanc
     obb1 = expand_obb(obb1, expansion_distance)
     obb2 = expand_obb(obb2, expansion_distance)
     return obb_collision(obb1, obb2)
+
+####################################################################################################
+
+def preprocess_image(img, vis=False):
+    _, buffer = cv2.imencode(".png", img[:, :, ::-1])
+    base64_image = base64.b64encode(buffer).decode("utf-8")
+    if vis:
+      # save the base64 image with cv2
+      img = base64.b64decode(base64_image)
+      img = BytesIO(img)
+      img = cv2.imdecode(np.frombuffer(img.read(), np.uint8), cv2.IMREAD_COLOR)
+      cv2.imwrite("image.jpeg", img)
+    return base64_image 
+
+def crop_max_circle(image):
+    """
+    Crop the largest possible circle from the center of the image.
+    """
+    height, width = image.shape[:2]
+    radius = min(height, width) // 2  # Maximum radius possible
+
+    # Compute the center of the image
+    center_x, center_y = width // 2, height // 2
+
+    # Create a circular mask
+    mask = np.zeros((height, width), dtype=np.uint8)
+    cv2.circle(mask, (center_x, center_y), radius, 255, thickness=-1)
+
+    # Apply mask
+    result = cv2.bitwise_and(image, image, mask=mask)
+
+    # Crop the square region containing the circle
+    cropped_circle = result[center_y - radius:center_y + radius, center_x - radius:center_x + radius]
+
+    # Create transparent background for cropped circle
+    b, g, r = cv2.split(cropped_circle)
+    alpha = mask[center_y - radius:center_y + radius, center_x - radius:center_x + radius]
+    cropped_circle_rgba = cv2.merge([b, g, r, alpha])
+
+    return cropped_circle_rgba
+
+def rotate_circle(image, angle):
+    """
+    Rotate only the circular cropped part, keeping the background transparent.
+    """
+    height, width = image.shape[:2]
+    center = (width // 2, height // 2)
+
+    # Compute rotation matrix
+    rotation_matrix = cv2.getRotationMatrix2D(center, angle, 1.0)
+
+    # Rotate only the cropped circle, keeping transparency
+    rotated_image = cv2.warpAffine(image, rotation_matrix, (width, height), flags=cv2.INTER_LINEAR, borderValue=(0, 0, 0, 0))
+
+    return rotated_image
+
+def crop_max_and_rotate(image, angle, size=(700, 700)):
+    """
+    Crop the largest possible circle from the center of the image and rotate it.
+    """
+    cropped_circle = crop_max_circle(image)
+    rotated_circle = rotate_circle(cropped_circle, angle)
+
+    return cv2.resize(rotated_circle, size, interpolation=cv2.INTER_LINEAR)[..., :3]
 

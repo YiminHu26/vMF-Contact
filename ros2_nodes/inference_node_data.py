@@ -189,6 +189,12 @@ class AIRNodeVLM(AIRNode):
         # check duplicates in labels, if there are duplicates, mark them with a number
         labels = mark_duplicates(labels)
 
+        # sort labels by score
+        scores = results[0]["scores"]
+        labels = [label for _, label in sorted(zip(scores, labels), reverse=True, key=lambda pair: pair[0])]
+        masks = [mask for _, mask in sorted(zip(scores, results[0]["masks"]), reverse=True, key=lambda pair: pair[0])]
+        scores = sorted(scores, reverse=True)
+
         print("[VLM]: Results: ", labels)
         print("[VLM]: Scores: ", results[0]["scores"])
 
@@ -200,7 +206,7 @@ class AIRNodeVLM(AIRNode):
             if "1" not in text:
                 continue
 
-            mask = results[0]["masks"][i].astype(np.uint8)[:, :, None]
+            mask = masks[i].astype(np.uint8)[:, :, None]
 
             # mask image and point cloud
             pcd_masked = pcd[mask.reshape(-1) == 1]
@@ -216,7 +222,7 @@ class AIRNodeVLM(AIRNode):
                 print(f"Object: {text} is out of range.")
                 continue
             try:
-                scene_object = compute_oriented_bounding_box(pcd_masked, label=text)
+                scene_object = SceneObject(pcd_masked, text)
             except:
                 print(f"Object: {text} failed to compute OBB.")
                 print(pcd_masked)

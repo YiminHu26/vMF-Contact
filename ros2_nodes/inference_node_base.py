@@ -31,7 +31,7 @@ from lang_sam import LangSAM
 from PIL import Image
 from vmf_contact_main.camera_utils import *
 from vmf_contact_main.active_grasp.spatial import *
-from vmf_contact_main.active_grasp.vlm_utils.bbox_langsam import *
+from vmf_contact_main.active_grasp.vlm_utils.img_bbox_utils import *
 import signal
 current_file_folder = os.path.dirname(os.path.abspath(__file__))
 
@@ -53,7 +53,11 @@ FAILED = "failed"
 MOVING = "moving"
 gaze_point_robot = [-0.73, 0.1, 0.1]
 
-obj_list = ["yellow bottle", "white bottle", "white dominos box", "white cup", "red cheezit box", "red apple", "cordless screwdriver"]
+obj_list = [
+   "red cup", "orange cordless drill", "red cheezit box", "purple plum", 
+   "yellow cup", "yellow tennisball", "red apple", "white baseball",
+   "yellow bottle", "white wooden box"
+]
 
 class AIRNode(Node):
 
@@ -306,7 +310,8 @@ class AIRNode(Node):
                 self.last_image_msg, 
                 self.last_depth_msg.astype(np.float32) / 1000.0, 
                 cam_pose_robot, 
-                azimuth), True
+                azimuth,
+                elevation), True
        
     def handle_user_input(self):
         raise NotImplementedError

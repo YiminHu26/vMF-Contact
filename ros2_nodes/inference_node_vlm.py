@@ -60,7 +60,7 @@ class AIRNodeVLM(AIRNode):
         # Active search setting
         parser = create_parser()
         args = parser.parse_args()
-        self.policy:VLMPolicy = make(args.policy)
+        self.policy:VLMPolicy = make(args.policy, target_object=target_object)
                 
         self.user_input_thread = threading.Thread(target=self.handle_user_input)
         self.user_input_thread.start()
@@ -95,11 +95,11 @@ class AIRNodeVLM(AIRNode):
                         self.get_logger().info("Searching for grasp...")
                 
                         while not self.policy.done:
-                            (pcd, rgb, d, cam_pose, rotation_angle), identifier = self.process_point_cloud_and_rgbd()
+                            (pcd, rgb, d, cam_pose, rotation_angle, elevation_angle), identifier = self.process_point_cloud_and_rgbd()
                             if not identifier:
                                 self.get_logger().info("No object detected, please try again.")
                                 continue
-                            self.policy.update(rgb, d, pcd, cam_pose, -rotation_angle)
+                            self.policy.update(rgb, d, pcd, cam_pose, rotation_angle, elevation_angle)
                             # self.rate.sleep()
 
                     self.rate.sleep()
@@ -126,6 +126,7 @@ class AIRNodeVLM(AIRNode):
                 break
 
     def process_grasp(self, grasp):
+        grasp = grasp.cpu().numpy()
         quat = quaternion_from_matrix(grasp)
         translation = translation_from_matrix(grasp)
         pose_chosen = np.concatenate([translation, quat])
@@ -140,7 +141,7 @@ class AIRNodeVLM(AIRNode):
             cmd = self.compute_velocity_cmd(x, linear_vel=linear_vel, angular_vel=angular_vel) 
 
             # publish the next view
-            if self.policy.nbv_field is None and self.policy.x_d is not None:
+            if len(self.nbv_fields) and self.policy.x_d is not None:
                 pose_robot_2_camera_next: Pose = pose_from_spacial_transform(self.policy.x_d)
                 self.publish_new_frame("camera_target_view", pose_stamped_from_pose(pose_robot_2_camera_next, "base_link"))
 
@@ -157,8 +158,10 @@ class AIRNodeVLM(AIRNode):
             view_focus = self.target_objects[self.target_objects_label[-1]].center
         _, theta, phi = cartesian_to_spherical(x.translation - view_focus)
 
-        if self.nbv_field is not None:
-            e_t = self.nbv_field(x.translation)
+        if len(self.nbv_fields):
+            e_t = np.zeros(3)
+            for nbv_field in self.nbv_fields:
+                e_t += nbv_field(P_q = x.translation)
         else:
             e_t = self.policy.x_d.translation - x.translation # translation error
         
@@ -191,8 +194,8 @@ class AIRNodeVLM(AIRNode):
         return self.policy.target_objects_label
     
     @property
-    def nbv_field(self):
-        return self.policy.nbv_field
+    def nbv_fields(self):
+        return self.policy.nbv_fields
     
 
 def main(args=None):

@@ -91,7 +91,7 @@ class AIRNodevMF(AIRNode):
             self.to_camera_ready_pose()
             user_input = input("Enter 's' to start next capture and 'q' to quit: ")
             if user_input == "s":
-                (pcd, rgb, d, cam_pose, _), identifier = self.process_point_cloud_and_rgbd()
+                (pcd, rgb, d, cam_pose, _, _), identifier = self.process_point_cloud_and_rgbd()
                 if not identifier:
                     print("No object detected, please try again.")
                     continue
