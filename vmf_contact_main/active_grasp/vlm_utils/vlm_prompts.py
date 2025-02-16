@@ -246,10 +246,19 @@ def return_prompt_scene(img, target_object, key_not_detected = []):
 def return_prompt_ordered_grasp(img, target_object):
     base64_image = preprocess_image(img)
     return [
-        # {
-        # "role": "system",
-        # "content": "Please analyze the provided image and generate a comprehensive list of all objects present within 0.5 meters, ignoring any noisy background elements. Use your internal chain-of-thought reasoning and perform a self-check to ensure every object is accurately identified, including those that might be largely occluded by other objects. Assume the roles of three experts—a scene analyst, a spatial relationship expert, and an object recognition specialist—each independently evaluating the image. Have these expert perspectives compare their outputs, merge any discrepancies, and decide on the most accurate descriptions. If you have access to a previously generated object list from another view, compare it with your current findings. For objects that appear in both lists but have different descriptions, merge their descriptors into a unified entry; if differences are significant, select the description that appears most accurate. Additionally, if you identify any new objects that were not present in the previous list, add them to the final list. Before outputting the final result, perform a thorough self-validation to ensure that all objects within the specified 0.5-meter region have been accounted for and that the output strictly adheres to the required JSON format. Do not include any additional text, explanations, or your internal chain-of-thought details in the final output, as this list will be used to generate instance masks with the SAM model."
-        # },
+        {
+        "role": "system",
+        "content": """You are an advanced Vision-Language Model (VLM) assisting in active vision for robotic grasping. Your task is to determine the best sequence of objects to remove in order to maximize the visibility and graspability of the target object. The grasping network's confidence score remains below the threshold after three iterations of Next-Best-View (NBV) searching due to occlusions.  
+              ### **Reasoning Process (Chain of Thought)**
+              1. **Analyze the scene:** Identify objects that occlude the target object based on their relative positions and bounding box centers.  
+              2. **Assess occlusion impact:** Determine which occluding object(s) contribute the most to the obstruction.  
+              ### **Expected Output Format**  
+              The output must be a JSON array of object labels in the correct removal sequence:  
+              ```json
+              ["object_1", "object_2", ..., "object_n"]
+              ```
+              """
+        },
         {
         "role": "user",
         "content": [
@@ -258,26 +267,8 @@ def return_prompt_ordered_grasp(img, target_object):
              "image_url": {"url": f"data:image/png;base64,{base64_image}"}},
             {"type": "text",
              "text": """
-              # **Prompt for VLM in Active Vision for Grasping with Occlusions**
-              ## **System Message**  
-              You are an advanced Vision-Language Model (VLM) assisting in active vision for robotic grasping. Your task is to determine the best sequence of objects to remove in order to maximize the visibility and graspability of the target object. The grasping network's confidence score remains below the threshold after three iterations of Next-Best-View (NBV) searching due to occlusions.  
-              ### **Reasoning Process (Chain of Thought)**
-              1. **Analyze the scene:** Identify objects that occlude the target object based on their relative positions and bounding box centers.  
-              2. **Assess occlusion impact:** Determine which occluding object(s) contribute the most to the obstruction.  
-              3. **Plan removal sequence:** Select the minimal set of objects that need to be removed, prioritizing those that will significantly improve the graspability of the target object.  
-              4. **Self-verify the plan:** Ensure that the chosen sequence will effectively improve the grasping feasibility.  
-              5. **Output the list:** The result should be a **list of object labels**, arranged in the order they should be removed.  
-              ### **Expected Output Format**  
-              The output must be a JSON array of object labels in the correct removal sequence:  
-              ```json
-              ["object_1", "object_2", ..., "object_n"]
-              ```
-              ###**User Input**
               The attached image is the current view, the target object is the """ + target_object + """, and the following json including the detected objects and their 3D position data. {json}
-              Example:
-              ###User Input ###
-              The attached image is the current view, the target object is the red cup 1, and the following json including the detected objects and their 3D position data. {'white bottle 1': array([-0.70933404, 0.17075446, 0.1427792 ]), 'yellow bottle 1': array([-0.68876168, 0.07280286, 0.11566064]), 'white dominos box 1': array([-0.77199606, 0.02609071, 0.15552781]), 'orange cordless screwdriver 1': array([-0.83586547, 0.15349605, 0.13168427]), 'red cup 1': array([-0.73091936, 0.11601965, 0.09285539])}
-                            """ 
+              """ 
         }
         ]
         }
