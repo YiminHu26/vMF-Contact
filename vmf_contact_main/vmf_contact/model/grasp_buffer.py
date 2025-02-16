@@ -286,6 +286,12 @@ class GraspBuffer:
             # calculate the distance between the contact points and the prompt points
             dist = torch.cdist(self.cp_fused, pcd_from_prompt)
             filter = filter & (dist.min(1).values < 0.01)
+            # visualize the grasp points
+            cp_vis = o3d.geometry.PointCloud()
+            cp_vis.points = o3d.utility.Vector3dVector(self.cp_fused.cpu().numpy())
+            pcd_from_prompt_vis = o3d.geometry.PointCloud()
+            pcd_from_prompt_vis.points = o3d.utility.Vector3dVector(pcd_from_prompt.cpu().numpy())
+            o3d.visualization.draw_geometries([cp_vis, pcd_from_prompt_vis])
 
         baseline = self.baseline_fused[filter]
         approach = approach_fused[filter]

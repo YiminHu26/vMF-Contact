@@ -224,7 +224,18 @@ class AIRNode(Node):
                 self.get_logger().info(f"Camera info received: {self.intrinsics}")
                 break
             except:
-                self.get_logger().info("No camera info received yet.")
+                self.get_logger().info("No camera info received yet, trying again...")
+                time.sleep(1)
+        
+        while True:
+            try:
+                pcd_msg_camera = self.last_point_cloud_msg
+                t_robot_2_camera = self.tf_buffer.lookup_transform(
+                    "base_link", pcd_msg_camera.header.frame_id, rclpy.time.Time()
+                )
+                break
+            except TransformException as e:
+                self.get_logger().info("Camera tf-transform not found, trying again...")
                 time.sleep(1)
 
     def listener_callback_pcd(self, msg: sensor_msgs.PointCloud2):

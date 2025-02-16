@@ -91,6 +91,11 @@ class AIRNodeVLM(AIRNode):
                 self.rate = self.create_rate(policy_rate)
 
                 while not clear:
+                    self.policy.activate(self.bbox, 
+                                 self.gaze_point_robot, 
+                                 target_object = target_object,
+                                 min_z_dist = min_z_dist)
+                    
                     with Timer("Search time"):
                         self.get_logger().info("Searching for grasp...")
                 

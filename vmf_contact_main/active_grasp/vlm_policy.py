@@ -30,7 +30,7 @@ class VLMPolicy(MultiViewPolicy):
         self.score_th = 0.5
         self.grasp_agent = main_module(parse_args_from_yaml(current_file_folder + "/../config.yaml"), learning=False)
         self.grasp_buffer = self.grasp_agent.grasp_buffer
-        self.target_objects_label = [target_object]
+        self.target_objects_label_order = [target_object]
         # input queues
         self.img_queue = multiprocessing.Queue(maxsize=1)
         self.depth_queue = multiprocessing.Queue(maxsize=1)
@@ -39,12 +39,26 @@ class VLMPolicy(MultiViewPolicy):
         self.elevation_angle_queue = multiprocessing.Queue(maxsize=1)
         self.rotation_angle_queue = multiprocessing.Queue(maxsize=1)
         self.vlm_cmd_queue = multiprocessing.Queue(maxsize=1)
+        self.target_object_queue = multiprocessing.Queue(maxsize=1)
         # output queues
         self.vlm_return_queue = multiprocessing.Queue(maxsize=1)
         # lock
         self.lock = multiprocessing.Lock()
+        # initialize the agent process
+        self.agent_process = multiprocessing.Process(target=agent_process, args=(
+            self.img_queue, 
+            self.depth_queue, 
+            self.pose_queue, 
+            self.pcd_queue, 
+            self.vlm_return_queue,
+            self.elevation_angle_queue,
+            self.rotation_angle_queue,
+            self.vlm_cmd_queue,
+            self.target_object_queue,
+            ), daemon=True)
+        self.agent_process.start()
 
-    def activate(self, bbox, pcd_shift, target_object, min_z_dist):
+    def activate(self, bbox, pcd_shift, min_z_dist, target_object):
         self.nbv_fields = []
         self.vlm_cmd = "scene"
         self.scene_objects = None
@@ -57,19 +71,7 @@ class VLMPolicy(MultiViewPolicy):
         self.done = False
         self.pcd_shift = pcd_shift
         self.target_objects = {}
-        # initialize the agent process
-        self.agent_process = multiprocessing.Process(target=agent_process, args=(
-            self.img_queue, 
-            self.depth_queue, 
-            self.pose_queue, 
-            self.pcd_queue, 
-            self.vlm_return_queue,
-            self.elevation_angle_queue,
-            self.rotation_angle_queue,
-            self.vlm_cmd_queue,
-            target_object,
-            ), daemon=True)
-        self.agent_process.start()
+        
         # output
 
     def update_viewsphere(self, box_center):
@@ -108,8 +110,10 @@ class VLMPolicy(MultiViewPolicy):
         elif isinstance(vlm_return, list):
             # ordered grasp for decluttering
             vlm_return.reverse()
-            self.target_objects_label += vlm_return
-            self.target_objects += [self.scene_objects[obj_label] for obj_label in vlm_return]
+            for obj_instance in vlm_return:
+                if obj_instance not in self.target_objects_label_order:
+                    self.target_objects_label_order.append(obj_instance)
+                    self.target_objects[obj_instance] = self.scene_objects[obj_instance]
         self.compile_next_view(pose)
         
         # # Compute the transformation from the current position to the gaze point
@@ -120,24 +124,24 @@ class VLMPolicy(MultiViewPolicy):
         # return transformation
     
     def compile_next_view(self, pose):
-        target_obj_label = self.target_objects_label[-1]
-        if self.word_based_matching(target_obj_label) is not None:
+        target_object_label_curr = self.target_objects_label_order[-1]
+        if self.word_based_matching(target_object_label_curr) is not None:
             while True:
                 # find the target object and its relations
-                print(f"[Policy]: Analyzing current target object: {target_obj_label} ...")
-                target_obj: SceneObject = self.word_based_matching(target_obj_label)
-                target_obj_label = self.compile_related_objects(pose, target_obj)
-                if target_obj_label is None:
+                print(f"[Policy]: Analyzing current target object: {target_object_label_curr} ...")
+                target_obj: SceneObject = self.word_based_matching(target_object_label_curr)
+                target_object_label_curr = self.compile_related_objects(pose, target_obj)
+                if target_object_label_curr is None:
                     break                
-            print(f"[Policy]: Target object to grasp: {self.target_objects_label[-1]} ...")
+            print(f"[Policy]: Target object to grasp: {self.target_objects_label_order[-1]} ...")
             self.vlm_cmd = "scene"
         else:
-            print(f"[Policy]: Target object {target_obj_label} is not found, start guessing ...")
+            print(f"[Policy]: Target object {target_object_label_curr} is not found, start guessing ...")
             self.vlm_cmd = "guess"
 
         # new gaze point on the target object
-        if self.target_objects_label[-1] in self.target_objects.keys():
-            gaze_point_new = self.target_objects[self.target_objects_label[-1]].center
+        if self.target_objects_label_order[-1] in self.target_objects.keys():
+            gaze_point_new = self.target_objects[self.target_objects_label_order[-1]].center
         else:
             gaze_point_new = self.view_sphere.center
         self.update_viewsphere(gaze_point_new)
@@ -153,7 +157,7 @@ class VLMPolicy(MultiViewPolicy):
                     print(f"[Policy]: Relation: below {obj.label}")
 
                     # Rule 0: Uncovers the object above the target object
-                    self.target_objects_label.append(obj.label)
+                    self.target_objects_label_order.append(obj.label)
                     self.target_objects[obj.label] = obj
                     print(f"[Policy]: Before grasping the object: {target_obj.label}, object: {obj.label} needs to be grasped")
                     return obj.label
@@ -177,10 +181,10 @@ class VLMPolicy(MultiViewPolicy):
                     # Rule 1: Uncovers the close object in front of camera if both objects are high
                     if not obj_1_low and not obj_2_low:
                         if cam_obj1_dist < cam_obj2_dist:
-                            self.target_objects_label.append(obj1.label)
+                            self.target_objects_label_order.append(obj1.label)
                             self.target_objects[obj1.label] = obj1
                         else:
-                            self.target_objects_label.append(obj2.label)
+                            self.target_objects_label_order.append(obj2.label)
                             self.target_objects[obj2.label] = obj2
                         print(f"[Policy]: Before grasping the object: {target_obj.label}, object: {obj.label} needs to be grasped")
                         return obj.label
@@ -228,13 +232,13 @@ class VLMPolicy(MultiViewPolicy):
             print(f"[Policy]: Object {target_obj.label} has no relations")
         return None
     
-    def word_based_matching(self, target_obj_label):
+    def word_based_matching(self, target_object_label_curr):
         for obj_id in self.scene_objects.keys():
-            if all(word in obj_id for word in target_obj_label.split()):
+            if all(word in obj_id for word in target_object_label_curr.split()):
                 target_obj = self.scene_objects[obj_id]
                 # print(f"[Policy]: Target object: {target_obj.label} at {target_obj.center} is found")
                 return target_obj
-        print(f"[Policy]: Object {target_obj_label} is not found")
+        print(f"[Policy]: Object {target_object_label_curr} is not found")
         return None
 
     def denoise_pcd(self, pcd):
@@ -270,29 +274,28 @@ class VLMPolicy(MultiViewPolicy):
                 self.curr_grasp = self.grasp_agent.inference(pcd, 
                                         pcd_from_prompt=None,
                                         shift=self.pcd_shift,
-                                        graspness_th=0.5,
+                                        graspness_th=0.2,
                                         vis=True,
                                         use_normal_vis=use_normal_vis)
                 # print(f"[vMF-Contact] Time taken for grasp inference: {time.time() - time_curr}")
 
 
     def best_grasp_prediction_is_stable(self, sort_by="kappa", sample_num=1):
-        if self.target_objects_label[-1] in self.target_objects.keys():
+        if self.target_objects_label_order[-1] in self.target_objects.keys():
             # get the current pcd of the target object
-            pcd_from_prompt=self.target_objects[self.target_objects_label[-1]].pcd
+            pcd_from_prompt=self.target_objects[self.target_objects_label_order[-1]].pcd
             
             # get the best grasp prediction on the target object
             poses, kappa, graspness = self.grasp_buffer.get_pose_fused(pcd_from_prompt=pcd_from_prompt)
 
+            if len(poses) == 0:
+                print(f"[vMF-Contact]: No grasp prediction on object {self.target_objects_label_order[-1]}")
+                return False
+            
             print(f"[vMF-Contact]: {poses}, {kappa}, {graspness}")
             
             # sort by kappa or graspness
             score = kappa if sort_by == "kappa" else graspness
-
-            # check if the score is empty or below the threshold
-            if score.size(0) == 0 or score.max() < self.score_th:
-                print(f"[vMF-Contact]: The best grasp prediction is not stable with score:", score.max())
-                return False
     
             #sort poses by criterion
             sample_num = min(sample_num, poses.size(0))
@@ -302,19 +305,19 @@ class VLMPolicy(MultiViewPolicy):
             pose_chosen = poses_candidates[random.randint(0, sample_num-1)].squeeze(0)
             self.best_grasp = pose_chosen
 
-            print(f"[vMF-Contact]: Best grasp prediction: {pose_chosen} on object {self.target_objects_label[-1]}")
+            print(f"[vMF-Contact]: Best grasp prediction: {pose_chosen} on object {self.target_objects_label_order[-1]}")
             return True
+        print(f"[vMF-Contact]: No target object found {self.target_objects_label_order[-1]} in {list(self.target_objects.keys())}")
         return False
 
 
     def remove_current_target(self):
-        self.done = False
-        if len(self.target_objects_label) > 1:
-            self.target_objects_label.pop()
-            self.target_objects.pop(self.target_objects_label[-1])
+        if len(self.target_objects_label_order) > 1:
+            self.target_objects_label_order.pop()
+            self.target_objects.pop(self.target_objects_label_order[-1])
             return False
         else:
-            self.target_objects_label = []
+            self.target_objects_label_order = []
             self.target_objects = {}
             return True
         

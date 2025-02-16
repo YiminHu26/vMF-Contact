@@ -49,6 +49,7 @@ def agent_process(img_queue,
         pcd = pcd_queue.get()
         vlm_cmd = vlm_cmd_queue.get()
         # start VLM inference
+        print("*"*50)
         print("[VLM]: Start VLM inference with task:", vlm_cmd)
         vlm_return = agent(img, depth, pose, pcd, rotation_angle, elevation_angle, vlm_cmd)
         # put output in queues
@@ -130,7 +131,15 @@ class VLMAgent():
                 print("[VLM]: Output text: ", text_processed)
             return vlm_description_dict
         else:
-            return ast.literal_eval(output_text)
+            obj_labels = ast.literal_eval(output_text)
+            instance_labels = []
+            # find the instance labels
+            for obj_label in obj_labels:
+                for scene_obj in self.scene_objects.values():
+                    if obj_label in scene_obj.label:
+                        instance_labels.append(scene_obj.label)
+                        break
+            return instance_labels
 
     def generate_langsam(self, pcd, img, vlm_description_dict):
 
@@ -220,7 +229,7 @@ class VLMAgent():
             # save masked image
             # cv2.imwrite(f"{current_file_folder}/{langsam_label}.jpg", img[..., ::-1] * mask)
         
-        o3d.visualization.draw_geometries(vis_list)
+        # o3d.visualization.draw_geometries(vis_list)
 
         if len(vlm_label_list) > 0:
             print("[VLM]: Objects not detected by LangSAM: ", vlm_label_list)
