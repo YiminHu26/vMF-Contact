@@ -26,36 +26,6 @@ current_file_folder = os.path.dirname(os.path.abspath(__file__))
 min_pixels = 256 * 28 * 28
 max_pixels = 2560 * 28 * 28
 
-def agent_process(img_queue, 
-                  depth_queue, 
-                  pose_queue, 
-                  pcd_queue, 
-                  vlm_return_queue,
-                  elevation_angle_queue,
-                  rotation_angle_queue,
-                  vlm_cmd_queue,
-                  target_object,
-                  ):
-    agent = VLMAgent(target_object)
-    while True:
-        if img_queue.empty() or depth_queue.empty() or pose_queue.empty() or pcd_queue.empty():
-            continue
-        # fetch data from queues
-        img = img_queue.get()
-        rotation_angle = rotation_angle_queue.get()
-        elevation_angle = elevation_angle_queue.get()
-        depth = depth_queue.get()
-        pose = pose_queue.get()
-        pcd = pcd_queue.get()
-        vlm_cmd = vlm_cmd_queue.get()
-        # start VLM inference
-        print("*"*50)
-        print("[VLM]: Start VLM inference with task:", vlm_cmd)
-        vlm_return = agent(img, depth, pose, pcd, rotation_angle, elevation_angle, vlm_cmd)
-        # put output in queues
-        vlm_return_queue.put(vlm_return)
-        print("[VLM]: VLM inference done with task:", vlm_cmd)
-
 
 class VLMAgent():
     def __init__(self, target_object = None):
@@ -66,35 +36,29 @@ class VLMAgent():
             base_url="https://dashscope.aliyuncs.com/compatible-mode/v1"
         )
 
-        self.message_history = []
-        self.image_history = []
-        self.key_not_detected = []
-        self.vlm_cmd = None
-        self.img_last = None
-
         assert target_object is not None, "Please specify the target object."
         self.target_object = target_object
+        self.clear()
     
-    def vlm_inference(self, img, depth=None, rotation_angle=0., elevation_angle=0.):
+    def clear(self):
+        self.scene_objects = {}
+        self.message_history = []
+        self.ordered_grasp_list = []
+        self.vlm_cmd = "return_prompt_scene"
+        self.img_last = None
+    
+    def vlm_inference(self, img, target_object_curr, rotation_angle=0., elevation_angle=0.):
         """
         Inference using VLM model
         """
-        # # normalize depth
-        # if depth is not None:
-        #     depth = (depth.max() - depth) / (depth.max() - depth.min() + 1e-6) * 255.
-        #     depth = depth.astype(np.uint8)
-        #     depth = np.clip(depth, 0, 255)
-        #     depth = depth[:, :, None].repeat(3, axis=2)
-
         curr_time = time.time()
 
         # rotate image
-        # print("[VLM]: Message history: ", self.message_history)
         img = crop_max_and_rotate(img, -rotation_angle)
         cv2.imwrite(f"{current_file_folder}/img.jpg", img[..., ::-1])
         
         if self.vlm_cmd == "return_prompt_scene":
-            self.message_history += return_prompt_scene(img, self.target_object, self.key_not_detected)
+            self.message_history += return_prompt_scene(img, self.target_object)
             message = self.message_history
 
         elif self.vlm_cmd in ["return_prompt_guess", "return_prompt_ordered_grasp"]:
@@ -102,11 +66,18 @@ class VLMAgent():
             bbox_data = {obj_label: obj_scene.return_dict() for obj_label, obj_scene in self.scene_objects.items()}
             json_data = json_scene_data(bbox_data, rotation_angle, elevation_angle)
             
-            message = return_prompt_guess(
-                imgs = [self.img_last, img], 
-                target_object = self.target_object, 
-                json_data = json_data
-                )
+            if self.vlm_cmd == "return_prompt_guess":
+                message = return_prompt_guess(
+                    imgs = [self.img_last, img], 
+                    target_object = target_object_curr, 
+                    json_data = json_data
+                    )
+            else:
+                message = return_prompt_ordered_grasp(
+                    img = img, 
+                    target_object = target_object_curr, 
+                    json_data = json_data
+                    )
             
         # give the message to the model
         output_text = self.client.chat.completions.create(
@@ -117,8 +88,11 @@ class VLMAgent():
         print("[VLM]: Output text: ", output_text)
         print(f"[VLM] Time taken: {time.time() - curr_time}")     
         
+        if "```json" in output_text:
+            output_text = output_text.split("```json")[-1].split("```")[0]
+
         if self.vlm_cmd == "return_prompt_scene":
-            text_processed = json.loads(output_text.split("```json")[-1].split("```")[0])
+            text_processed = json.loads(output_text)
             vlm_description_dict = {}
             try:
                 for item in text_processed:
@@ -132,14 +106,13 @@ class VLMAgent():
             return vlm_description_dict
         else:
             obj_labels = ast.literal_eval(output_text)
-            instance_labels = []
+            
             # find the instance labels
             for obj_label in obj_labels:
                 for scene_obj in self.scene_objects.values():
                     if obj_label in scene_obj.label:
-                        instance_labels.append(scene_obj.label)
+                        self.ordered_grasp_list.append(scene_obj)
                         break
-            return instance_labels
 
     def generate_langsam(self, pcd, img, vlm_description_dict):
 
@@ -230,20 +203,19 @@ class VLMAgent():
             # cv2.imwrite(f"{current_file_folder}/{langsam_label}.jpg", img[..., ::-1] * mask)
         
         # o3d.visualization.draw_geometries(vis_list)
-
-        if len(vlm_label_list) > 0:
-            print("[VLM]: Objects not detected by LangSAM: ", vlm_label_list)
-            self.key_not_detected = vlm_label_list
-        else:
-            print("[VLM]: All objects detected by LangSAM.")
-            self.key_not_detected = []
     
-    def __call__(self, img, depth, pose, pcd_raw, rotation_angle, elevation_angle, vlm_cmd="scene"):
-        
+    
+    def set_vlm_cmd(self, vlm_cmd):
+        print("[VLM]: Switching to VLM command:", vlm_cmd)
         self.vlm_cmd = "return_prompt_" + vlm_cmd
         
+    
+    def __call__(self, img, pose, pcd_raw, rotation_angle, elevation_angle, target_object_curr):
+        print("*"*100)
+        print("[VLM]: Start VLM inference with task:", self.vlm_cmd)
+        
         # view description by qwen
-        vlm_output = self.vlm_inference(img, depth, rotation_angle, elevation_angle)
+        vlm_output = self.vlm_inference(img, target_object_curr, rotation_angle, elevation_angle)
 
         self.img_last = img
 
@@ -252,7 +224,5 @@ class VLMAgent():
             self.generate_langsam(pcd_raw, img, vlm_output)
             # compile relations between objects
             compile_relation(self.scene_objects.values())
-            return self.scene_objects
-        else:
-            return vlm_output
+        print("[VLM]: VLM inference done with task:", self.vlm_cmd)        
 

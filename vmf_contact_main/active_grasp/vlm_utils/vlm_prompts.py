@@ -16,92 +16,6 @@ if __name__ == "__main__":
 else:
   from .img_bbox_utils import *
 
-######################################################################################################################
-
-use_langsam = False
-if use_langsam:
-  from lang_sam import LangSAM
-  lansam_model = LangSAM(sam_type="sam2.1_hiera_large")
-
-def generate_langsam(self, pcd, img, min_z_dist = .45, gaze_point_robot = np.array([-0.73, 0.1, 0.1])):
-
-  def mark_duplicates(labels):
-      label_count = {}
-      result = []
-      
-      for label in labels:
-          if label in label_count:
-              label_count[label] += 1
-          else:
-              label_count[label] = 1
-          result.append(f"{label} {label_count[label]}")
-      return result
-  
-  # Process the prompt point cloud
-  time_curr = time.time()
-
-  # predict masks with lang_sam
-  results = self.langsam_model.predict([Image.fromarray(img)], [". ".join(object_list_exp)])
-
-  print(f"[LangSAM] Time taken: {time.time() - time_curr}")
-          
-  # check if there are labels detected
-  labels = results[0]["labels"]
-  if len(labels) == 0:
-      print("[VLM]: No labels detected.")
-      return pcd
-  # check duplicates in labels, if there are duplicates, mark them with a number
-  labels = mark_duplicates(labels)
-
-  # sort labels by score
-  scores = results[0]["scores"]
-  labels = [label for _, label in sorted(zip(scores, labels), reverse=True, key=lambda pair: pair[0])]
-  masks = [mask for _, mask in sorted(zip(scores, results[0]["masks"]), reverse=True, key=lambda pair: pair[0])]
-  scores = sorted(scores, reverse=True)
-
-  print("[VLM]: Results: ", labels)
-  print("[VLM]: Scores: ", results[0]["scores"])
-
-  vis_list = []
-  scene_objects = []
-  # mask point cloud and image
-  for i, text in enumerate(labels):
-
-      if "1" not in text:
-          continue
-
-      mask = masks[i].astype(np.uint8)[:, :, None]
-
-      # mask image and point cloud
-      pcd_masked = pcd[mask.reshape(-1) == 1]
-
-      # filter out noises out of range:
-      pcd_masked = pcd_masked[(pcd_masked[:, 2] > 0.01) & (pcd_masked[:, 2] < min_z_dist)]
-      pcd_masked_dist_to_gaze = np.linalg.norm(pcd_masked[:, :3] - gaze_point_robot, axis=1)
-      pcd_masked = pcd_masked[pcd_masked_dist_to_gaze < min_z_dist - 0.3]
-
-      # compile scene object
-      if pcd_masked.shape[0] == 0:
-          print(f"Object: {text} is out of range.")
-          continue
-      try:
-          scene_object = SceneObject(pcd_masked, text)
-      except:
-          print(f"Object: {text} failed to compute OBB.")
-          print(pcd_masked)
-          continue
-      scene_objects.append(scene_object)
-      print(f"Object: {scene_object.instance_id}. Center: {scene_object.center}") 
-
-      # visualize the scene object
-      vis_list += visualize_pcd_with_obb(pcd_masked, scene_object.bbox_3d)
-      # save masked image
-      # cv2.imwrite(f"{current_file_folder}/{text}.jpg", img[..., ::-1] * mask)
-  
-  o3d.visualization.draw_geometries(vis_list)
-          
-  return scene_objects
-
 ######################################################################################################################  
 
 def compile_expert_data(filename):
@@ -160,15 +74,8 @@ del ind
 
 ######################################################################################################################
 
-def return_prompt_scene(img, target_object, key_not_detected = []):
+def return_prompt_scene(img, target_object):
     base64_image = preprocess_image(img)
-
-    if len(key_not_detected):
-        key_not_detected = ", ".join(key_not_detected)
-        additional_text = f"**Cautious: Objects not found in your last analysis by SAM:** {key_not_detected}. Please ensure to correct them in this round."
-        print(additional_text)   
-    else:
-        additional_text = None
 
     return [
         # {
@@ -182,7 +89,7 @@ def return_prompt_scene(img, target_object, key_not_detected = []):
             {"type": "image_url", 
              "image_url": {"url": f"data:image/png;base64,{base64_image}"}},
             {"type": "text",
-             "text": f"""
+             "text": """
               Analyze the provided image and generate a **comprehensive list of all objects within 0.5 meters**, ignoring any noisy background elements. This analysis will be performed through the independent evaluations of **three expert perspectives**:
 
               1. **Scene Analyst** - Identifies objects based on spatial context, occlusions, and visibility.
@@ -208,12 +115,14 @@ def return_prompt_scene(img, target_object, key_not_detected = []):
                     - `"descriptors"`: **An array containing exactly three adjectives or descriptive phrases** (e.g., `["red", "plastic", "near box"]`).
                 - **No extra text, explanations, or chain-of-thought reasoning** should appear in the final output. \n
                
+              """ 
+              + f"""
               4. **Important**
-                - Please put a special focus on the object: {target_object}. If it is detected, ensure to put it as the first dictionary. \n
-              
-              """
-              + additional_text if additional_text is not None else "" + 
-              """
+                - **Please put a special focus on the object: {target_object}**. If it is detected, ensure to put it as the first dictionary.  
+                - **Background object such as table should not be included** 
+                \n
+              """ 
+              + """
               ### **Final Output Example**
               ```json
               [
@@ -243,7 +152,7 @@ def return_prompt_scene(img, target_object, key_not_detected = []):
           }
         ]
 
-def return_prompt_ordered_grasp(img, target_object):
+def return_prompt_ordered_grasp(img, target_object, json_data):
     base64_image = preprocess_image(img)
     return [
         {
@@ -254,7 +163,7 @@ def return_prompt_ordered_grasp(img, target_object):
               2. **Assess occlusion impact:** Determine which occluding object(s) contribute the most to the obstruction.  
               ### **Expected Output Format**  
               The output must be a JSON array of object labels in the correct removal sequence:  
-              ```json
+              ```
               ["object_1", "object_2", ..., "object_n"]
               ```
               """
@@ -266,8 +175,13 @@ def return_prompt_ordered_grasp(img, target_object):
             {"type": "image_url", 
              "image_url": {"url": f"data:image/png;base64,{base64_image}"}},
             {"type": "text",
-             "text": """
-              The attached image is the current view, the target object is the """ + target_object + """, and the following json including the detected objects and their 3D position data. {json}
+             "text": f"""
+              The attached image is the current view, the target object is the **{target_object}**, and the following json including the detected objects and their 3D position data: \n{json_data}\n
+              
+              The output must be a JSON array of object labels in the correct removal sequence without any extra text, explanations, or chain-of-thought reasoning.:  
+              ```
+              ["object_1", "object_2", ..., "object_n"]
+              ```
               """ 
         }
         ]
@@ -282,31 +196,24 @@ def return_prompt_guess(imgs, target_object:str, json_data):
         "content":
             """
               You are an advanced Vision-Language Model (VLM). You have been provided with two views of current scence, a list of objects detected in the scene by GroundingDINO. 
-
               Each object is described by its label name, its center coordinates (x,y,z), its Bbox size(length, width, height), and its 3D Bbox corner coordinate (eight vertex coordinates). All units are meter.
-
               Your goal is to determine which visible object is most likely blocking, hiding or totally occluding a currently invisible: """ + target_object + """ in the scene (including situations such as being covered or enclosed). To do so, follow these steps:
-
               Adopt the “Expert Mode” and pretend you are three different experts, each analyzing the scenario and potentially reaching different conclusions.
-
               Focus on relevant physical properties—such as shape, size, position, and coverage—rather than color-based similarities when deciding which object might be blocking, hiding or totally occluding the invisible target.
-
               Each of the three experts may arrive at their own candidate. Combine or vote on their conclusions, unifying the final response into one label.
-
               Use a chain-of-thought (e.g., Chain of Thought or Program of Thought) to perform the internal reasoning. 
-
               You have to at least provide one label name of the object that is most likely blocking, hiding or totally occluding the target object. **Important**: Please generate the list in descending order of your confidence.""" 
         }]
     
     # examples
-    for i, (target_obj_exp, occluding_obj_exp) in enumerate(target_occlusion_pairs_exp.values()):
+    for i, (target_object_exp, occluding_obj_exp) in enumerate(target_occlusion_pairs_exp.values()):
     
       msgs.append({
               "role": "user",
               "content": [
                   {
                       "type": "text",
-                      "text": f"Find the {target_obj_exp} with following scene information: \n{json_data_exp[i*2+1]}\n```"
+                      "text": f"Find the {target_object_exp} with following scene information: \n{json_data_exp[i*2+1]}\n```"
                   },
                   {
                       "type": "image_url",

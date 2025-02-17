@@ -160,6 +160,7 @@ class AIRNode(Node):
         self.set_eelink("tcp")
         self.movement_finished_flag.clear()
         self.send_goal(self.camera_ready_pose)
+        self.open_gripper()
 
         while not self.movement_finished_flag.is_set():
             continue
@@ -563,7 +564,7 @@ class AIRNode(Node):
                 elif state_machine_state == FAILED:
                     self.get_logger().info("State machine failed")
                     return False
-            return True
+            return input("Is the grasp successful? (y/n): ").lower() == "y"
 
     def get_input(self):
         try:

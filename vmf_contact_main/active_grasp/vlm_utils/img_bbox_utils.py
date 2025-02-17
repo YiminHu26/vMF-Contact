@@ -61,7 +61,7 @@ def compute_oriented_bounding_box(pcd, lower_percentile=4, upper_percentile=96):
         upper_percentile (float): The upper percentile to clip outliers.
 
     Returns:
-        SceneObject: A SceneObject instance containing the OBB details.
+        SceneObject: An object with the computed OBB and other properties.
     """
     # Step 1: Remove outliers using percentile clipping
     lower_bound = np.percentile(pcd, lower_percentile, axis=0)

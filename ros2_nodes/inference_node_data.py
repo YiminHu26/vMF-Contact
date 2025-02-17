@@ -32,7 +32,6 @@ azi_ele_groups = [
 
 azi_ele_groups = [[(0, 1), (50, 135)]]
 
-
 class State:
     def __init__(self, tsdf):
         self.tsdf = tsdf

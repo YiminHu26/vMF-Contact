@@ -22,13 +22,13 @@ from pathlib import Path
 O_RESOLUTION = 40
 O_SIZE = .3
 O_VOXEL_SIZE = O_SIZE / O_RESOLUTION
-min_z_dist = 0.45
-linear_vel = 0.1
+min_z_dist = .45
+linear_vel = .05
 angular_vel = 1
-control_rate = 60
+control_rate = 30
 policy_rate = 4
 
-target_object = "red cup"
+target_object = "green cup"
 
 class State:
     def __init__(self, tsdf):
@@ -38,9 +38,10 @@ class AIRNodeVLM(AIRNode):
 
     def __init__(self):
         super().__init__()
+        self.set_vel_acc(.5, 1.)
 
-        self.camera_ready_pose = list_to_pose_stamped([-0.370, -0.592, 1.224, 0.942, 0.007, -0.005, 0.336], "world")
-        self.gaze_point_robot=np.array([-0.86, 0.1, 0.0])
+        self.camera_ready_pose = list_to_pose_stamped([-0.370, -0.612, 1.224, 0.942, 0.007, -0.005, 0.336], "world")
+        self.gaze_point_robot=np.array([-0.73, 0.1, 0.])
         pcd_center = list_to_pose_stamped(self.gaze_point_robot.tolist() + [0., 0., 0., 1.], "base_link")
         self.publish_new_frame("center", pcd_center)
             
@@ -60,7 +61,10 @@ class AIRNodeVLM(AIRNode):
         # Active search setting
         parser = create_parser()
         args = parser.parse_args()
-        self.policy:VLMPolicy = make(args.policy, target_object=target_object)
+        self.policy:VLMPolicy = make(args.policy, 
+                                     target_object=target_object, 
+                                     pcd_shift=self.gaze_point_robot,
+                                     min_z_dist=min_z_dist,)
                 
         self.user_input_thread = threading.Thread(target=self.handle_user_input)
         self.user_input_thread.start()
@@ -72,63 +76,58 @@ class AIRNodeVLM(AIRNode):
         self.get_camera_info()
         self.to_camera_ready_pose()
         success = clear = False
-        while True:
-            # Move to the camera ready pose
-            self.policy.activate(self.bbox, 
-                                 self.gaze_point_robot, 
-                                 target_object = target_object,
-                                 min_z_dist = min_z_dist)
+        # while True:
+        # Move to the camera ready pose
+        self.policy.activate(self.bbox)
 
-            # user_input = input("Enter 's' to start next capture and 'q' to quit: ")
-            user_input = "s"
-            if user_input == "s":
-                self.set_eelink("camera_color_optical_frame")
-                # Initialize the search policy
-                                
-                self.change_state_to_servo_ctl()
-                self.create_timer(1.0 / control_rate, self.send_vel_cmd)
-                self.create_timer(1.0 / control_rate, self.grasp_inference)
-                self.rate = self.create_rate(policy_rate)
+        # user_input = input("Enter 's' to start next capture and 'q' to quit: ")
+        # user_input = "s"
+        # if user_input == "s":
+        
+        # Initialize the search policy
+                        
+        self.create_timer(1.0 / control_rate, self.send_vel_cmd)
+        self.create_timer(1.0 / control_rate, self.grasp_inference)
+        self.rate = self.create_rate(policy_rate)
 
-                while not clear:
-                    self.policy.activate(self.bbox, 
-                                 self.gaze_point_robot, 
-                                 target_object = target_object,
-                                 min_z_dist = min_z_dist)
-                    
-                    with Timer("Search time"):
-                        self.get_logger().info("Searching for grasp...")
-                
-                        while not self.policy.done:
-                            (pcd, rgb, d, cam_pose, rotation_angle, elevation_angle), identifier = self.process_point_cloud_and_rgbd()
-                            if not identifier:
-                                self.get_logger().info("No object detected, please try again.")
-                                continue
-                            self.policy.update(rgb, d, pcd, cam_pose, rotation_angle, elevation_angle)
-                            # self.rate.sleep()
+        while not clear:
+            self.set_eelink("camera_color_optical_frame")
+            self.change_state_to_servo_ctl()
+            with Timer("Search time"):
+                self.get_logger().info("Searching for grasp...")
+                self.policy.activate(self.bbox)
+        
+                while not self.policy.done:
+                    (pcd, rgb, d, cam_pose, rotation_angle, elevation_angle), identifier = self.process_point_cloud_and_rgbd()
+                    if not identifier:
+                        self.get_logger().info("No object detected, please try again.")
+                        continue
+                    self.policy.update(rgb, d, pcd, cam_pose, rotation_angle, elevation_angle)
+                    # self.rate.sleep()
 
-                    self.rate.sleep()
-                    grasp = self.policy.best_grasp
-                    self.change_state_to_cartesian_ctl()
-                    self.set_eelink("tcp")
+            self.rate.sleep()
+            grasp = self.policy.best_grasp
+            self.change_state_to_cartesian_ctl()
+            self.set_eelink("tcp")
 
-                    if grasp is not None:
-                        self.get_logger().info("Search policy done, start grasp execution.")
-                        with Timer("Grasp execution"):
-                            pose = self.process_grasp(grasp)
-                            success = self.execute_grasp(pose)
-                    else:
-                        self.get_logger().info("Aborted grasp execution.")
-                        success = False
-                    
-                    if success:
-                        self.get_logger().info("Grasp successful.")
-                        clear = self.policy.remove_current_target()
+            if grasp is not None:
+                self.get_logger().info("Search policy done, start grasp execution.")
+                with Timer("Grasp execution"):
+                    pose = self.process_grasp(grasp)
+                    success = self.execute_grasp(pose)
+            else:
+                self.get_logger().info("Aborted grasp execution.")
+                success = False
+            
+            if success:
+                self.get_logger().info("Grasp successful.")
+                clear = all([word in self.policy.target_object_curr_label for word in target_object.split(" ")])
+            time.sleep(5)
 
-            elif user_input == "q":
-                self.shutdown = True
-                self.change_state_to_cartesian_ctl()
-                break
+        # elif user_input == "q":
+        #     self.shutdown = True
+        #     self.change_state_to_cartesian_ctl()
+        #     break
 
     def process_grasp(self, grasp):
         grasp = grasp.cpu().numpy()
@@ -138,42 +137,32 @@ class AIRNodeVLM(AIRNode):
         return list_to_pose(pose_chosen)
     
     def send_vel_cmd(self):
-        if self.policy.x_d is None or self.policy.done:
+        if len(self.nbv_fields)==0 or self.policy.done:
             cmd = np.zeros(6)
         else:
             t_robot_2_camera = self.tf_buffer.lookup_transform("base_link", "camera_color_optical_frame", rclpy.time.Time()).transform
             x = SpatialTransform.from_matrix(transform_to_matrix(t_robot_2_camera))
             cmd = self.compute_velocity_cmd(x, linear_vel=linear_vel, angular_vel=angular_vel) 
 
-            # publish the next view
-            if len(self.nbv_fields) and self.policy.x_d is not None:
-                pose_robot_2_camera_next: Pose = pose_from_spacial_transform(self.policy.x_d)
-                self.publish_new_frame("camera_target_view", pose_stamped_from_pose(pose_robot_2_camera_next, "base_link"))
-
             # publish the view velocity
             pose_robot_2_camera: Pose = transform_to_pose(t_robot_2_camera)
             pose_robot_2_camera_next = apply_transform_to_pose(pose_robot_2_camera, cmd) 
             self.publish_new_frame(f"camera_view_velocity", pose_stamped_from_pose(pose_robot_2_camera_next, "base_link")) 
+            # print(f"cmd: {cmd}")
         self.send_twist_cmd(cmd)
 
     def compute_velocity_cmd(self, x, linear_vel=0.05, angular_vel=1):
-        if len(self.target_objects_label) == 0: 
-            view_focus = self.view_sphere.center 
-        else: 
-            view_focus = self.target_objects[self.target_objects_label[-1]].center
+        view_focus = self.view_sphere.center
         _, theta, phi = cartesian_to_spherical(x.translation - view_focus)
 
-        if len(self.nbv_fields):
-            e_t = np.zeros(3)
-            for nbv_field in self.nbv_fields:
-                e_t += nbv_field(P_q = x.translation)
-        else:
-            e_t = self.policy.x_d.translation - x.translation # translation error
+        e_t = self.policy.query_field_fusion_from_list(x.translation)
         
         r = np.linalg.norm(x.translation - self.gaze_point_robot)
         e_n = (x.translation - view_focus) * (self.view_sphere.r - r) / r # pull the camera towards the sphere
 
-        linear = 1.0 * e_t + 6.0 * (r < self.view_sphere.r) * e_n # weighted sum of the two errors
+        # self.logger.info(f"e_t: {e_t}, e_n: {e_n}")
+
+        linear = 1.0 * e_t + 2.0 * (r < self.view_sphere.r) * e_n # weighted sum of the two errors
 
         scale = np.linalg.norm(linear) + 1e-6
         linear *= np.clip(scale, 0.0, linear_vel) / scale # scale the linear velocity

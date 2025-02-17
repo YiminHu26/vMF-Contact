@@ -7,7 +7,7 @@ from vgn.grasp import Grasp
 
 class ViewHalfSphere:
     def __init__(self, bbox, min_z_dist):
-        self.center = bbox.center
+        self.center = np.array(bbox.center)
         self.r = 0.5 * bbox.size[2] + min_z_dist
 
     def get_view(self, theta, phi):

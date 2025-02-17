@@ -136,6 +136,7 @@ class AIRNodeGIGAActive(AIRNode):
             pose_robot_2_camera: Pose = transform_to_pose(t_robot_2_camera)
             pose_robot_2_camera_next = apply_transform_to_pose(pose_robot_2_camera, cmd) 
             self.publish_new_frame(f"camera_view_velocity", pose_stamped_from_pose(pose_robot_2_camera_next, "base_link"))
+            self.logger.info(f"View velocity: {cmd}")
         self.send_twist_cmd(cmd)
 
     def compute_velocity_cmd(self, x_d, x, linear_vel=0.05, angular_vel=1):

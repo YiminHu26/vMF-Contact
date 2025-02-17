@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 
-truncate=np.pi/6
+truncate=np.pi/3
 # np.random.seed(42)
 
 def generate_random_points_in_sphere(S, R_s, num_points=10):
@@ -110,12 +110,11 @@ def query_tangent_vector(S, R_s, P1, P2, P_q):
     return tangent_vector * beta # + generate_upward_tangent_vector(S, P_q) 
 
 
-def query_tangent_vector_sum(S, R_s, Ps, P_q):
+def query_tangent_vector_sum_from_field_list(S, P_q, field_list):
     """sum up the tangent vectors"""
-    tangent_vector = 0
-    P2 = Ps[0]
-    for P1 in Ps[1:]:
-        tangent_vector += query_tangent_vector(S, R_s, P1, P2, P_q)
+    tangent_vector = np.zeros(3)
+    for field in field_list:
+        tangent_vector += field(P_q = P_q)
 
     radial_vector = P_q - S
     radial_vector = radial_vector / np.linalg.norm(radial_vector)
@@ -124,7 +123,11 @@ def query_tangent_vector_sum(S, R_s, Ps, P_q):
     if elevation <= truncate and np.dot(tangent_vector, upward) < 0:
         # rejection on upward tangent vector
         tangent_vector = tangent_vector - np.dot(tangent_vector, upward) * upward
+        print(f"elevation: {elevation / np.pi * 180}")
 
+    mag = np.linalg.norm(tangent_vector)
+    if mag < 1e-2:
+        tangent_vector*= 0
     return tangent_vector
 
 
@@ -145,36 +148,53 @@ import matplotlib.animation as animation
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
+from functools import partial
 
-def animate_query_tangent_vectors(S, R_s, num_queries=20, Ps_num=10, steps=100, dt=0.1):
+def animate_query_tangent_vectors(S, R_s, Ps_num=2):
     """
     Animates query points moving along the velocity field on the sphere with trajectory visualization.
     """
     # Generate reference points inside the sphere
     Ps = generate_random_points_in_sphere(S, R_s, Ps_num)
 
+    query_point_cam = generate_random_points_on_sphere(S, R_s, 1)[0]
+
+    animate_query_tangent_vector(S, 
+                                 R_s, 
+                                 query_point_cam,
+                                 Ps[0],
+                                 Ps[1:],
+                                 field_list=[partial(query_tangent_vector, S, R_s, Ps[i], Ps[0]) for i in range(1, Ps_num)])
+    
+    
+
+def animate_query_tangent_vector(S, 
+                                R_s, 
+                                query_point_cam, 
+                                target_point,
+                                occlusion_points,
+                                field_list=None,
+                                steps=100, dt=1e-2, num_queries=20):
+    """
+    Animates query points moving along the velocity field on the sphere with trajectory visualization.
+    """
     # Generate multiple query points on the sphere
-    query_points = generate_random_points_on_sphere(S, R_s, num_queries)
-    query_points = np.array(query_points)
+    query_point_cam = np.array(query_point_cam)
     
     # Store trajectories for all query points
-    trajectories = [[] for _ in range(num_queries)]
+    trajectory = []
     
     fig = plt.figure(figsize=(8, 8))
     ax = fig.add_subplot(111, projection='3d')
 
-    # Generate P1 and P2 inside the sphere
-    Ps = generate_random_points_in_sphere(S, R_s, Ps_num)
-
     # Generate multiple query points on the sphere
     query_points = generate_random_points_on_sphere(S, R_s, num_queries)
     query_points = np.array(query_points)
     
-    # Select reference points for computing the field
-    P0 = Ps[0] #  Ps[1] + (Ps[2] - Ps[1]) * 0.5 #  
-
     # Compute tangent vectors at each query point
-    tangent_vectors = np.array([query_tangent_vector_sum(S, R_s, Ps, P_q) for P_q in query_points])
+    tangent_vectors = np.zeros((num_queries**2, 3))
+    for i, q in enumerate(query_points):
+        tangent_vectors[i] = query_tangent_vector_sum_from_field_list(S, P_q=q, field_list=field_list)
     
     # Plot sphere surface
     u = np.linspace(0, np.pi / 2, 30)
@@ -188,52 +208,46 @@ def animate_query_tangent_vectors(S, R_s, num_queries=20, Ps_num=10, steps=100, 
     points_plot, = ax.plot([], [], [], 'ro', label="Query Points")
 
     # Plot P1, P2, and the query points
-    ax.scatter(*P0, color='green', label="P1", s=200)
-    for i, P in enumerate(Ps[1:]):
+    ax.scatter(*target_point, color='green', label="P1", s=200)
+    for i, P in enumerate(occlusion_points):
         ax.scatter(*P, color='blue', label=f"P{i+2}", s=200)
     ax.scatter(*np.array(query_points).T, color='purple', label="Query Points", s=20)
     
-    tangent_vectors /= np.linalg.norm(tangent_vectors, axis=1)[:, None]
-    
     # Plot tangent vectors
-    query_points = np.array(query_points)
     ax.quiver(query_points[:, 0], query_points[:, 1], query_points[:, 2],
               tangent_vectors[:, 0], tangent_vectors[:, 1], tangent_vectors[:, 2],
-              length=1, color='red', label="Tangent Vectors")
+              length=.1, color='red', label="Tangent Vectors")
     
     # Initialize scatter plot for moving points
-    points_plot, = ax.plot([], [], [], 'ro', label="Query Points")
-    trajectory_lines = [ax.plot([], [], [], 'b-', alpha=0.5)[0] for _ in range(num_queries)]
+    point_plot, = ax.plot([], [], [], 'ro', label="Query Point")
+    trajectory_line = ax.plot([], [], [], 'b-', alpha=0.5)[0]
     
     def update(frame):
-        nonlocal query_points, trajectories
+        nonlocal query_point_cam, trajectory
         
         # Recompute tangent vectors at current positions
-        tangent_vectors = np.array([query_tangent_vector_sum(S, R_s, Ps, P_q) for P_q in query_points])
-        tangent_vectors /= np.linalg.norm(tangent_vectors, axis=1)[:, None] + 1e-6
+        tangent_vector = query_tangent_vector_sum_from_field_list(S, P_q=query_point_cam, field_list=field_list)
         
         # Compute new positions
-        query_points += dt * tangent_vectors
+        query_point_cam += dt * tangent_vector
         
         # Project back to the sphere
-        query_points = S + R_s * (query_points - S) / np.linalg.norm(query_points - S, axis=1)[:, None]
+        query_point_cam = S + R_s * (query_point_cam - S) / np.linalg.norm(query_point_cam - S)
         
         # Store new positions in trajectories for all query points
-        for i in range(num_queries):
-            trajectories[i].append(query_points[i].copy())
+        trajectory.append(query_point_cam.copy())
             
         # Update scatter plot
-        points_plot.set_data(query_points[:, 0], query_points[:, 1])
-        points_plot.set_3d_properties(query_points[:, 2])
+        point_plot.set_data(query_point_cam[None,:][:,0], query_point_cam[None,:][:,1])
+        point_plot.set_3d_properties(query_point_cam[None,:][:,2])
         
         # Update trajectory lines for all query points
-        for i, traj in enumerate(trajectories):
-            #if len(traj) > 1:
-            traj_arr = np.array(traj)
-            trajectory_lines[i].set_data(traj_arr[:, 0], traj_arr[:, 1])
-            trajectory_lines[i].set_3d_properties(traj_arr[:, 2])
         
-        return [points_plot] + trajectory_lines
+        traj_arr = np.array(trajectory)
+        trajectory_line.set_data(traj_arr[:,0], traj_arr[:,1]) 
+        trajectory_line.set_3d_properties(traj_arr[:,2])
+        
+        return [points_plot] + [trajectory_line]
     
     ax.set_xlabel("X")
     ax.set_ylabel("Y")
@@ -244,12 +258,12 @@ def animate_query_tangent_vectors(S, R_s, num_queries=20, Ps_num=10, steps=100, 
     max_range = R_s * 1.2
     ax.set_xlim(S[0] - max_range, S[0] + max_range)
     ax.set_ylim(S[1] - max_range, S[1] + max_range)
-    ax.set_zlim(S[2] - max_range + 1.6, S[2] + max_range)
+    ax.set_zlim(S[2] - max_range, S[2] + max_range)
     
     ani = animation.FuncAnimation(fig, update, frames=steps, interval=50, blit=False)
     plt.show()
 
 if __name__ == "__main__":
     S = np.array([0, 0, 0])  # Sphere Center
-    R_s = 5  # Sphere Radius
+    R_s = 1  # Sphere Radius
     animate_query_tangent_vectors(S, R_s)

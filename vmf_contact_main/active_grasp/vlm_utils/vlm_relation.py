@@ -27,7 +27,7 @@ class SceneConstraints:
         corners = inst.bbox_3d
         return min(corners, key=lambda corner: corner[2])
     
-    def is_below(self, inst_0, inst_1, ratio_xy = 0.5, height_threshold = 0.032) -> bool:
+    def is_below(self, inst_0, inst_1, ratio_xy = 0.5, height_threshold = 0.048) -> bool:
         """Checks if inst_0 is below inst_1 within the defined threshold."""
         c0, c1 = self._get_coordinates(inst_0), self._get_coordinates(inst_1)
         dx, dy = c1[:2] - c0[:2]
@@ -36,11 +36,11 @@ class SceneConstraints:
         l0, w0, h0 = inst_0.bbox_dims
         l1, w1, h1 = inst_1.bbox_dims
         wl_threshold = (max(w0, w1) + max(l0, l1)) / 2 * ratio_xy
-        if dz < height_threshold and dxy < wl_threshold:
+        if dxy < wl_threshold:
             print(f"Below relation between: {inst_0.label}, {inst_1.label}:")
-            print(f"z differece: {dz}, xy difference: {dxy}")
-            print(f"wl threshold: {wl_threshold}")
-            return True
+            print(f"z differece: {dz}")
+            if dz < height_threshold:
+                return True
         return False
         
     def _check_relative_position_xy(self, inst_0, inst_1) -> bool:
