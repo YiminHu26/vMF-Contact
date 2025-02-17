@@ -19,6 +19,8 @@ from functools import partial
 # from vgn.utils import ros_utils
 from pathlib import Path
 
+MOVING_BACK_TO_NBV = "moving_back_to_nbv"
+
 O_RESOLUTION = 40
 O_SIZE = .3
 O_VOXEL_SIZE = O_SIZE / O_RESOLUTION
@@ -38,8 +40,6 @@ class AIRNodeVLM(AIRNode):
 
     def __init__(self):
         super().__init__()
-        self.set_vel_acc(.5, 1.)
-
         self.camera_ready_pose = list_to_pose_stamped([-0.370, -0.612, 1.224, 0.942, 0.007, -0.005, 0.336], "world")
         self.gaze_point_robot=np.array([-0.73, 0.1, 0.])
         pcd_center = list_to_pose_stamped(self.gaze_point_robot.tolist() + [0., 0., 0., 1.], "base_link")
@@ -69,6 +69,7 @@ class AIRNodeVLM(AIRNode):
         self.user_input_thread = threading.Thread(target=self.handle_user_input)
         self.user_input_thread.start()
         self.set_vel_acc(.2, .1)
+        self.nbv_memory_pose = None
   
     
     def handle_user_input(self):
@@ -109,6 +110,7 @@ class AIRNodeVLM(AIRNode):
             grasp = self.policy.best_grasp
             self.change_state_to_cartesian_ctl()
             self.set_eelink("tcp")
+            self.nbv_memory_pose = self.get_current_ee_pose()
 
             if grasp is not None:
                 self.get_logger().info("Search policy done, start grasp execution.")
@@ -175,6 +177,161 @@ class AIRNodeVLM(AIRNode):
         if identifier:
             self.policy.update_grasp(pcd, use_normal_vis)
     
+
+    def execute_grasp(self, grasp_pose:Pose, frame = "base_link"):
+
+        self.change_state_to_cartesian_ctl()
+        self.get_logger().info("Sending goal now...")
+
+        # transform posestamped from base_link to world using t_world_2_base_link
+        grasp_pose = pose_stamped_from_pose(grasp_pose, "base_link")
+        t_world_2_base_link = self.tf_buffer.lookup_transform("world", frame, rclpy.time.Time())
+        grasp_pose.pose = tf2_geometry_msgs.do_transform_pose(grasp_pose.pose, t_world_2_base_link)
+        grasp_pose.header.frame_id = "world"
+        self.publish_new_frame("grasp", grasp_pose)
+
+        pregrasp_pose = self.create_pregrasp_pose(copy.deepcopy(grasp_pose))
+        self.publish_new_frame("pregrasp", pregrasp_pose)
+        
+        # ask if the user wants to continue
+        user_input = input("Press 'c' to continue or any other key to quit: ")
+        if user_input.lower() == 'c':
+
+            self.stop_event.clear()
+            self.movement_failed_flag.clear()
+            self.movement_finished_flag.clear()
+            state_machine_state = IDLE
+            
+            while True:
+                if self.stop_event.is_set():
+                    self.stop_event.clear()
+                    self.get_logger().info("Goal cancelled")
+                    self.to_camera_ready_pose()
+                    state_machine_state = MOVING_TO_CAMERA_READY
+                    self.get_logger().info("StateMachine switched to MOVING_TO_CAMERA_READY")
+
+                if state_machine_state == IDLE:
+                    # Send the goal to move to the pregrasp pose
+                    self.send_goal(pregrasp_pose)
+                    # Start the state machine
+                    state_machine_state = MOVING_TO_PREGRASP
+                    self.get_logger().info("StateMachine switched to MOVING_TO_PREGRASP")
+                    # Create a thread to handle the input
+                    self.cancel_thread = threading.Thread(target=self.get_input)
+                    self.cancel_thread.start()
+
+                elif state_machine_state == MOVING_TO_PREGRASP:
+                    if self.movement_finished_flag.is_set():
+                        self.movement_finished_flag.clear()
+                        # Wait for manual grasp evaluation
+                        time.sleep(2)
+                        self.send_goal(grasp_pose)
+                        # Start the state machine
+                        state_machine_state = MOVING_TO_GRASP
+                        self.get_logger().info("StateMachine switched to MOVING_TO_GRASP")
+                        time.sleep(0.1)
+
+                    if self.movement_failed_flag.is_set():
+                        self.movement_failed_flag.clear()
+                        state_machine_state = FAILED
+                        self.get_logger().info("StateMachine switched to FAILED")
+                        
+                elif state_machine_state == MOVING_TO_GRASP:
+                    # Wait for the action server to finish
+                    if self.movement_finished_flag.is_set():
+                        self.movement_finished_flag.clear()
+                        time.sleep(2)
+                        # Close the gripper
+                        self.close_gripper()
+                        state_machine_state = GRASPING
+                        self.get_logger().info("StateMachine switched to GRASPING")
+                        
+                    if self.movement_failed_flag.is_set():
+                        self.movement_failed_flag.clear()
+                        state_machine_state = FAILED
+                        self.get_logger().info("StateMachine switched to FAILED")
+
+                elif state_machine_state == GRASPING:
+                    # Wait for the gripper to finish
+                    if self.gripper_movement_finished_flag.is_set():
+                        self.gripper_movement_finished_flag.clear()
+                        # Before gripper moves away, wait for 2 seconds
+                        time.sleep(0.25)
+                        # Send the goal to move to the pregrasp pose
+                        self.send_goal(pregrasp_pose)
+                        state_machine_state = MOVING_TO_PREGRASP_RETURN
+                        self.get_logger().info("StateMachine switched to MOVING_TO_PREGRASP_RETURN")
+                        time.sleep(1)
+                    if self.gripper_movement_failed_flag.is_set():
+                        self.gripper_movement_failed_flag.clear()
+                        state_machine_state = FAILED
+                
+                elif state_machine_state == MOVING_TO_PREGRASP_RETURN:
+                    # Wait for the action server to finish
+                    if self.movement_finished_flag.is_set():
+                        self.movement_finished_flag.clear()
+                        # Send the goal to move to the drop off pose
+                        self.send_goal(self.drop_off_pose)
+                        state_machine_state = MOVING_TO_DROP_OFF
+                        self.get_logger().info("StateMachine switched to MOVING_TO_DROP_OFF")
+                    if self.movement_failed_flag.is_set():
+                        self.movement_failed_flag.clear()
+                        state_machine_state = FAILED
+                        self.get_logger().info("StateMachine switched to FAILED")
+                
+                elif state_machine_state == MOVING_TO_DROP_OFF:
+                    # Wait for the action server to finish
+                    if self.movement_finished_flag.is_set():
+                        self.movement_finished_flag.clear()
+                        # Open the gripper
+                        self.open_gripper()
+                        state_machine_state = RELEASEING
+                        self.get_logger().info("StateMachine switched to RELEASEING")
+                    if self.movement_failed_flag.is_set():
+                        self.movement_failed_flag.clear()
+                        state_machine_state = FAILED
+                        self.get_logger().info("StateMachine switched to FAILED")
+                
+                elif state_machine_state == RELEASEING:
+                    # Wait for the gripper to finish
+                    if self.gripper_movement_finished_flag.is_set():
+                        self.gripper_movement_finished_flag.clear()
+                        # Send the goal to move to the camera ready pose
+                        self.to_nbv_pose()
+                        state_machine_state = MOVING_BACK_TO_NBV
+                        self.get_logger().info("StateMachine switched to MOVING_BACK_TO_NBV")
+                    if self.gripper_movement_failed_flag.is_set():
+                        self.gripper_movement_failed_flag.clear()
+                        state_machine_state = FAILED
+                        self.get_logger().info("StateMachine switched to FAILED")
+                
+                elif state_machine_state == MOVING_BACK_TO_NBV:
+                    # Wait for the action server to finish
+                    if self.movement_finished_flag.is_set():
+                        self.movement_finished_flag.clear()
+                        state_machine_state = IDLE
+                        self.get_logger().info("State machine finished, please enter any key to finish the input thread.")
+                        break
+                    if self.movement_failed_flag.is_set():
+                        self.movement_failed_flag.clear()
+                        state_machine_state = FAILED
+                        self.get_logger().info("StateMachine switched to FAILED")
+                
+                elif state_machine_state == FAILED:
+                    self.get_logger().info("State machine failed")
+                    return False
+            return input("Is the grasp successful? (y/n): ").lower() == "y"
+        
+
+    def to_nbv_pose(self):
+        self.change_state_to_cartesian_ctl()
+        self.set_eelink("tcp")
+        self.movement_finished_flag.clear()
+        self.send_goal(self.nbv_memory_pose)
+        self.open_gripper()
+        while not self.movement_finished_flag.is_set():
+            continue
+
     @property
     def view_sphere(self):
         return self.policy.view_sphere
