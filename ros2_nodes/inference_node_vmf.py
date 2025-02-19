@@ -4,7 +4,6 @@ import time
 import rclpy
 import cv2
 from geometry_msgs.msg import PoseStamped, TransformStamped, Pose, Transform
-from tf2_sensor_msgs.tf2_sensor_msgs import do_transform_cloud, transform_points
 from vmf_contact_main.train import main_module, parse_args_from_yaml
 from cv_bridge import CvBridge
 import os, torch

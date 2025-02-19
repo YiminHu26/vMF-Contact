@@ -27,7 +27,7 @@ class SceneConstraints:
         corners = inst.bbox_3d
         return min(corners, key=lambda corner: corner[2])
     
-    def is_below(self, inst_0, inst_1, ratio_xy = 0.5, height_threshold = 0.048) -> bool:
+    def is_below(self, inst_0, inst_1, ratio_xy = 0.5, height_threshold = 0.0491) -> bool:
         """Checks if inst_0 is below inst_1 within the defined threshold."""
         c0, c1 = self._get_coordinates(inst_0), self._get_coordinates(inst_1)
         dx, dy = c1[:2] - c0[:2]

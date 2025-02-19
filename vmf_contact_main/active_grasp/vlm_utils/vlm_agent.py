@@ -159,6 +159,7 @@ class VLMAgent():
 
         self.scene_objects = {}
         vis_list = []
+        pcd_colors = generate_distinct_colors(len(labels))
 
         # # remove previous image
         # if os.path.exists(f"{current_file_folder}/"):
@@ -197,7 +198,7 @@ class VLMAgent():
             # print(str(scene_object))
 
             # visualize the scene object
-            vis_list += visualize_pcd_with_obb(pcd_masked, scene_object.bbox_3d)
+            vis_list += visualize_pcd_with_obb(pcd_masked, scene_object.bbox_3d, pcd_colors[i])
 
             # save masked image
             # cv2.imwrite(f"{current_file_folder}/{langsam_label}.jpg", img[..., ::-1] * mask)

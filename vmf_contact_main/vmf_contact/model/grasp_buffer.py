@@ -200,7 +200,7 @@ class GraspBuffer:
         self.bin_score_fused[unique_indices] = self.bin_score_fused[unique_indices] + bin_score_sum
     
     
-    def integrate(self, baseline, bin_score, cp, grasp_width, kappa, graspness, dist_th_pcd=0.01, dist_th_baseline = 0.86):
+    def integrate(self, baseline, bin_score, cp, grasp_width, kappa, graspness, dist_th_pcd=0.02, dist_th_baseline = 0.86):
         if self.baseline_fused is None:
             cp, grasp_width, baseline, bin_score, kappa, graspness = self.self_merge_grasps(
                 cp, grasp_width, baseline, bin_score, kappa, graspness, dist_th_pcd, dist_th_baseline
@@ -279,8 +279,7 @@ class GraspBuffer:
         return poses, kappa, graspness
     
     def get_grasp_fused(self, pcd_from_prompt=None):
-        approach_fused = self.approach_from_bin_score(self.bin_score_fused, self.baseline_fused)
-        filter = self.graspness_fused > self.graspness_fused.max() * 0.1
+        filter = self.graspness_fused > self.graspness_fused.max() * 0.0
         #filter = filter & (self.kappa_fused > self.kappa_fused.max() * 0.5)
         filter = filter.squeeze(-1)
 
@@ -288,7 +287,9 @@ class GraspBuffer:
             pcd_from_prompt = torch.tensor(pcd_from_prompt, device=self.cp_fused.device, dtype=torch.float32)
             # calculate the distance between the contact points and the prompt points
             dist = torch.cdist(self.cp_fused, pcd_from_prompt)
-            filter = filter & (dist.min(1).values < 0.01)
+            filter = filter & (dist.min(1).values < 0.002)
+
+        approach_fused = self.approach_from_bin_score(self.bin_score_fused, self.baseline_fused)
 
         baseline = self.baseline_fused[filter]
         approach = approach_fused[filter]

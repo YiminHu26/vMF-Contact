@@ -1,10 +1,9 @@
-import itertools
+import time
 import numpy as np
 from .policy import MultiViewPolicy
 from .timer import Timer
 from .nbv import get_voxel_at, raycast
-from .spatial import SpatialTransform, look_at, ViewHalfSphere
-from .bbox import AABBox
+from .spatial import SpatialTransform
 from vmf_contact_main.train import main_module, parse_args_from_yaml
 from scipy.spatial.transform import Rotation
 import os
@@ -24,32 +23,28 @@ O_SIZE = .3
 
 
 class VLMPolicy(MultiViewPolicy):
-    def __init__(self, target_object, pcd_shift, min_z_dist):
+    def __init__(self, target_object, pcd_center, min_z_dist):
         super().__init__()
         self.max_views = 80
-        self.score_th = 0.5
+        self.score_th = 0.4
         self.grasp_agent = main_module(parse_args_from_yaml(current_file_folder + "/../config.yaml"), learning=False)
         self.grasp_buffer = self.grasp_agent.grasp_buffer
         self.target_object_final = target_object
         # initialize the agent process
         self.vlm_agent = VLMAgent(target_object=target_object)
-        self.pcd_shift = pcd_shift
+        self.pcd_center = pcd_center
         self.min_z_dist = min_z_dist
+        self.activate()        
 
 
-    def activate(self, bbox):
+    def activate(self):
         self.nbv_fields = []
+        self.nbv_reached = False
         self.grasp_buffer.clear()
         self.vlm_agent.clear()
-
-        self.bbox = bbox
-        self.view_sphere = ViewHalfSphere(bbox, self.min_z_dist)
         self.views = 0
-        
         self.best_grasp = None
         self.x_d = None
-        
-        self.target_object_curr_label = self.target_object_final
         self.target_object_curr = None
         self.done = False
 
@@ -67,32 +62,32 @@ class VLMPolicy(MultiViewPolicy):
     
 
     def compile_next_view(self, pose):
-        if self.word_based_matching(self.target_object_curr_label) is not None:
+        if len(self.vlm_agent.ordered_grasp_list) > 0:
+            self.target_object_curr = self.vlm_agent.ordered_grasp_list[0]
+            self.ordered_grasp_list.clear()
+
+        if self.word_based_matching() is not None:
             while True:
                 # find the target object and its relations
                 print(f"[Policy]: Analyzing current target object: {self.target_object_curr_label} ...")
                 # match the target object label with the corresponding scene object
-                self.target_object_curr: SceneObject = self.word_based_matching(self.target_object_curr_label)
+                self.target_object_curr: SceneObject = self.word_based_matching()
                 if self.compile_related_objects(pose) is None:
                     break                
-            print(f"[Policy]: Target object to grasp: {self.target_object_curr.label} ...")
-            self.visualize_nbv_fields(pose.translation)
+            print(f"[Policy]: Target object to grasp: {self.target_object_curr_label} ...")
+            # create the NBV fields from all tall objects in the scene
+            self.create_nbv_field()
+            self.wait_nbv_run()
+            # self.visualize_nbv_fields(pose.translation)
             self.vlm_agent.set_vlm_cmd("scene")
         else:
             print(f"[Policy]: Target object {self.target_object_curr_label} is not found, start guessing ...")
             self.vlm_agent.set_vlm_cmd("guess")
-
-        # new gaze point on the target object
-        # if self.target_object_curr is not None:
-        #     gaze_point_new = self.target_object_curr.center
-        # else:
-        #     gaze_point_new = self.view_sphere.center
-        # self.update_viewsphere(gaze_point_new)
     
 
     def compile_related_objects(self, pose):
-        self.nbv_fields = []
-        self.nbv_occ = []
+        nbv_fields = []
+        nbv_occ = []
         current_cam_pos = np.array(pose.translation)
         # Decision making based on the relations
         if len(self.target_object_curr.relations) > 0:
@@ -103,10 +98,9 @@ class VLMPolicy(MultiViewPolicy):
                     print(f"[Policy]: Relation: below {obj.label}")
 
                     # Rule 0: Uncovers the object above the target object
-                    print(f"[Policy]: Before grasping the object: {self.target_object_curr.label}, object: {obj.label} needs to be grasped")
+                    print(f"[Policy]: Before grasping the object: {self.target_object_curr_label}, object: {obj.label} needs to be grasped")
                     # update the target object
                     self.target_object_curr = obj
-                    self.target_object_curr_label = obj.label
                     return True
                     
                 elif "between" in rel:
@@ -127,38 +121,23 @@ class VLMPolicy(MultiViewPolicy):
 
                     # Rule 1: Uncovers the close object in front of camera if both objects are high
                     if obj_1_high and obj_2_high:
-                        print(f"[Policy]: Before grasping the object: {self.target_object_curr.label}, object: {obj.label} needs to be grasped")
                         # update the target object
                         if cam_obj1_dist < cam_obj2_dist:
+                            print(f"[Policy]: Before grasping the object: {self.target_object_curr_label}, object: {obj1.label} needs to be grasped")
                             self.target_object_curr=obj1
-                            self.target_object_curr_label=obj1.label
                         else:
+                            print(f"[Policy]: Before grasping the object: {self.target_object_curr_label}, object: {obj2.label} needs to be grasped")
                             self.target_object_curr=obj2
-                            self.target_object_curr_label=obj2.label
                         return True
 
                     # Rule 2: NBV is across the perpendicular plane between the target object and the high object
                     elif not obj_2_high and obj_1_high:
                         if cam_obj2_dist < cam_target_object_dist:
-                            self.nbv_occ.append(obj2.center)
-                            self.nbv_fields.append(
-                                query_tangent_vector(
-                                S = self.view_sphere.center,
-                                R_s = self.min_z_dist,
-                                P1 = obj2.center,
-                                P2 = self.target_object_curr.center,)
-                                )
+                            nbv_occ.append(obj2.center)
+                            nbv_fields.append(self.nbv_func(obj2))
                     elif not obj_2_high and obj_1_high:
                         if cam_obj1_dist < cam_target_object_dist:
-                            self.nbv_occ.append(obj1.center)
-                            self.nbv_fields.append(
-                                partial(
-                                query_tangent_vector,
-                                S = self.view_sphere.center,
-                                R_s = self.min_z_dist,
-                                P1 = obj1.center,
-                                P2 = self.target_object_curr.center
-                                ))
+                            nbv_fields.append(self.nbv_func(obj1))
                             
                 elif "to" in rel:
                     relative_pos = rel[3:].split(" to")[0]
@@ -169,23 +148,51 @@ class VLMPolicy(MultiViewPolicy):
 
                         # Rule 3: NBV is across the perpendicular plane between the target object 
                         # and the object and towards the target object
-                        self.nbv_occ.append(obj.center)
-                        self.nbv_fields.append(
-                            partial(
-                            query_tangent_vector,
-                            S = self.view_sphere.center,
-                            R_s = self.min_z_dist,
-                            P1 = obj.center,
-                            P2 = self.target_object_curr.center
-                            ))
+                        nbv_occ.append(obj.center)
+                        nbv_fields.append(self.nbv_func(obj))
         else:
-            print(f"[Policy]: Object {self.target_object_curr.label} has no relations")
+            print(f"[Policy]: Object {self.target_object_curr_label} has no relations")
+        
+        self.nbv_fields = nbv_fields
+        self.nbv_occ = nbv_occ
 
+
+    def create_nbv_field(self):
+        nbv_fields = []
+        nbv_occ = []
+        for obj in self.scene_objects.values():
+            if obj.label != self.target_object_curr_label and self.target_object_curr.center[-1] - obj.center[-1] < 0.03:
+                print(f"[Policy]: Object {obj.label} considered for NBV")
+                nbv_occ.append(obj.center)
+                nbv_fields.append(self.nbv_func(obj))  
+        self.nbv_fields = nbv_fields
+        self.nbv_occ = nbv_occ
+
+
+    def nbv_func(self, obj):
+        return partial(
+            query_tangent_vector,
+            S = self.pcd_center,
+            R_s = self.min_z_dist,
+            P1 = obj.center,
+            P2 = self.target_object_curr.center
+        )      
+    
+    def wait_nbv_run(self):
+        time_curr = time.time()
+        while not self.nbv_reached:
+            # wait for the NBV fields to be generated
+            print(f"[Policy]: Waiting for the NBV to be reached ...")
+            if time.time() - time_curr > 15:
+                break
+            time.sleep(3)
+        print(f"[Policy]: NBV is reached.")
+    
     def visualize_nbv_fields(self, current_cam_pos):
         if True and len(self.nbv_fields) > 0:
             current_cam_pos = np.array(current_cam_pos)
             # visualize the NBV fields
-            animate_query_tangent_vector(self.view_sphere.center, 
+            animate_query_tangent_vector(self.pcd_center, 
                                         self.min_z_dist, 
                                         current_cam_pos,
                                         self.target_object_curr.center, 
@@ -193,24 +200,24 @@ class VLMPolicy(MultiViewPolicy):
                                         self.nbv_fields)
     
 
-    def word_based_matching(self, target_object_curr_label):
+    def word_based_matching(self):
         for obj_id in self.scene_objects.keys():
-            if all(word in obj_id for word in target_object_curr_label.split()):
+            if all(word in obj_id for word in self.target_object_curr_label.split()):
                 target_obj = self.scene_objects[obj_id]
                 # print(f"[Policy]: Target object: {target_obj.label} at {target_obj.center} is found")
                 return target_obj
-        print(f"[Policy]: Object {target_object_curr_label} is not found")
+        print(f"[Policy]: Object {self.target_object_curr_label} is not found")
         return None
     
 
     def update(self, img, depth, pcd_raw, x, rotation_angle, elevation_angle):
         x = self.translate_pose(x)
 
+        with Timer("view_generation"):
+            self.generate_view(img, x, pcd_raw, rotation_angle, elevation_angle)
+        
         if self.views > self.max_views or self.best_grasp_prediction_is_stable():
             self.done = True
-        else:
-            with Timer("view_generation"):
-                self.generate_view(img, x, pcd_raw, rotation_angle, elevation_angle)
     
 
     def update_grasp(self, pcd_raw, use_normal_vis=False):
@@ -223,35 +230,26 @@ class VLMPolicy(MultiViewPolicy):
                 time_curr = time.time()
                 self.curr_grasp = self.grasp_agent.inference(pcd, 
                                         pcd_from_prompt=None,
-                                        shift=self.pcd_shift,
-                                        graspness_th=0.5,
+                                        shift=self.pcd_center,
+                                        graspness_th=self.score_th,
                                         vis=True,
                                         use_normal_vis=use_normal_vis)
                 # print(f"[vMF-Contact] Time taken for grasp inference: {time.time() - time_curr}")
 
 
-    def best_grasp_prediction_is_stable(self, sort_by="kappa", sample_num=1):
-        if self.target_object_curr is not None or len(self.ordered_grasp_list):
-            for target_object_curr in self.ordered_grasp_list + [self.target_object_curr]:
+    def best_grasp_prediction_is_stable(self, sort_by="graspness", sample_num=3):
+        if self.target_object_curr is not None:
                 # get the current pcd of the target object
-                pcd_from_prompt=target_object_curr.pcd
-                
-                # get the best grasp prediction on the target object
-                poses, kappa, graspness = self.grasp_buffer.get_pose_fused(pcd_from_prompt=pcd_from_prompt)
-
-                if len(poses) > 0:
-                    break
-
-                print(f"[vMF-Contact]: No grasp prediction on object: {target_object_curr.label}, even if it's found.")
+            pcd_from_prompt=self.target_object_curr.pcd
             
+            # get the best grasp prediction on the target object
+            poses, kappa, graspness = self.grasp_buffer.get_pose_fused(pcd_from_prompt=pcd_from_prompt)
+
             if len(poses) == 0:
+                print(f"[vMF-Contact]: No grasp prediction on object: {self.target_object_curr_label}, even if it's found.")
                 self.vlm_agent.set_vlm_cmd("ordered_grasp")
                 return False
-            
-            # update the target object which has valid grasp prediction
-            self.target_object_curr_label = target_object_curr.label
-            self.target_object_curr = target_object_curr
-                            
+                                        
             # sort by kappa or graspness
             score = kappa if sort_by == "kappa" else graspness
     
@@ -263,17 +261,11 @@ class VLMPolicy(MultiViewPolicy):
             pose_chosen = poses_candidates[random.randint(0, sample_num-1)].squeeze(0)
             self.best_grasp = pose_chosen
 
-            print(f"[vMF-Contact]: Best grasp prediction on object: {target_object_curr.label}, identified.")
+            print(f"[vMF-Contact]: Best grasp prediction on object: {self.target_object_curr_label}, identified.")
 
             return True
         print(f"[vMF-Contact]: No target object found on object: {self.target_object_curr_label}")
         return False
-    
-    def update_viewsphere(self, box_center):
-        box_min = [box_center[0] - O_SIZE, box_center[1] - O_SIZE, box_center[2] - O_SIZE]
-        box_max = [box_center[0] + O_SIZE, box_center[1] + O_SIZE, box_center[2] + O_SIZE]
-        self.bbox = AABBox(box_min, box_max)
-        self.view_sphere = ViewHalfSphere(self.bbox, self.min_z_dist)
     
 
     def translate_pose(self, x):
@@ -290,7 +282,7 @@ class VLMPolicy(MultiViewPolicy):
     
 
     def denoise_pcd(self, pcd):
-        pcd = pcd - self.pcd_shift
+        pcd = pcd - self.pcd_center
         pcd = pcd[(pcd[:, 0] > -O_SIZE) & (pcd[:, 0] < O_SIZE)]
         pcd = pcd[(pcd[:, 1] > -O_SIZE) & (pcd[:, 1] < O_SIZE)]
         pcd = pcd[(pcd[:, 2] > 0.025) & (pcd[:, 2] < 0.45)]
@@ -303,9 +295,15 @@ class VLMPolicy(MultiViewPolicy):
     def query_field_fusion_from_list(self, translation):
         assert len(self.nbv_fields) > 0, "No NBV fields to query."
         translation = np.array(translation)
-        return query_tangent_vector_sum_from_field_list(S=self.view_sphere.center,
+        return query_tangent_vector_sum_from_field_list(S=self.pcd_center,
                                                         P_q = translation,
                                                         field_list=self.nbv_fields)
+    
+    @property
+    def target_object_curr_label(self):
+        if self.target_object_curr is not None:
+            return self.target_object_curr.label
+        return self.target_object_final
     
     @property
     def scene_objects(self):

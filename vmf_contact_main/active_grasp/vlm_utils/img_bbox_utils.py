@@ -110,7 +110,7 @@ def compute_oriented_bounding_box(pcd, lower_percentile=4, upper_percentile=96):
     return obb_center_world, bbox_dims, obb_corners
 
 
-def visualize_pcd_with_obb(pcd, obb_corners):
+def visualize_pcd_with_obb(pcd, obb_corners, pcd_color=None):
     """
     Visualize the point cloud and its Oriented Bounding Box (OBB) in Open3D.
     
@@ -118,11 +118,12 @@ def visualize_pcd_with_obb(pcd, obb_corners):
         pcd (np.ndarray): (N, 3) numpy array containing point cloud data.
         obb_corners (np.ndarray): (8, 3) numpy array containing the 8 OBB corners.
     """
-    # obb_corners = expand_obb(obb_corners, 0.02)  # Expand OBB for better visualization
-
     # Create Open3D Point Cloud
     pcd_vis = o3d.geometry.PointCloud()
     pcd_vis.points = o3d.utility.Vector3dVector(pcd)
+    if pcd_color is not None:
+        pcd_color = pcd_color[None, :].repeat(len(pcd), axis=0).astype(np.float64)  # Broadcast color
+        pcd_vis.colors = o3d.utility.Vector3dVector(pcd_color)
     
     # Create Open3D Line Set for OBB
     lines = [
@@ -303,4 +304,11 @@ def crop_max_and_rotate(image, angle, size=(700, 700)):
     rotated_circle = rotate_circle(cropped_circle, angle)
 
     return cv2.resize(rotated_circle, size, interpolation=cv2.INTER_LINEAR)[..., :3]
+
+import colorsys
+
+def generate_distinct_colors(n):
+    """Generates `n` distinct colors as a NumPy array with float RGB values (0-1)."""
+    colors = np.array([colorsys.hsv_to_rgb(i / n, 1.0, 1.0) for i in range(n)], dtype=np.float32)
+    return colors
 

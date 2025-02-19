@@ -201,7 +201,7 @@ def return_prompt_guess(imgs, target_object:str, json_data):
               Adopt the “Expert Mode” and pretend you are three different experts, each analyzing the scenario and potentially reaching different conclusions.
               Focus on relevant physical properties—such as shape, size, position, and coverage—rather than color-based similarities when deciding which object might be blocking, hiding or totally occluding the invisible target.
               Each of the three experts may arrive at their own candidate. Combine or vote on their conclusions, unifying the final response into one label.
-              Use a chain-of-thought (e.g., Chain of Thought or Program of Thought) to perform the internal reasoning. 
+              Use a hidden chain-of-thought to perform the internal reasoning without any extra text or explanations. 
               You have to at least provide one label name of the object that is most likely blocking, hiding or totally occluding the target object. **Important**: Please generate the list in descending order of your confidence.""" 
         }]
     

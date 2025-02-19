@@ -123,7 +123,7 @@ def query_tangent_vector_sum_from_field_list(S, P_q, field_list):
     if elevation <= truncate and np.dot(tangent_vector, upward) < 0:
         # rejection on upward tangent vector
         tangent_vector = tangent_vector - np.dot(tangent_vector, upward) * upward
-        print(f"elevation: {elevation / np.pi * 180}")
+        # print(f"elevation: {elevation / np.pi * 180}")
 
     mag = np.linalg.norm(tangent_vector)
     if mag < 1e-2:
@@ -205,21 +205,21 @@ def animate_query_tangent_vector(S,
     ax.plot_surface(X, Y, Z, color='lightblue', alpha=0.3)
     
     # Initialize scatter plot for moving points
-    points_plot, = ax.plot([], [], [], 'ro', label="Query Points")
+    points_plot, = ax.plot([], [], [], 'ro', label="Query points")
 
     # Plot P1, P2, and the query points
-    ax.scatter(*target_point, color='green', label="P1", s=200)
+    ax.scatter(*target_point, color='green', label="Target Object", s=200)
     for i, P in enumerate(occlusion_points):
-        ax.scatter(*P, color='blue', label=f"P{i+2}", s=200)
+        ax.scatter(*P, color='blue', label=f"Neighbour {i+1}", s=200)
     ax.scatter(*np.array(query_points).T, color='purple', label="Query Points", s=20)
     
     # Plot tangent vectors
     ax.quiver(query_points[:, 0], query_points[:, 1], query_points[:, 2],
               tangent_vectors[:, 0], tangent_vectors[:, 1], tangent_vectors[:, 2],
-              length=.1, color='red', label="Tangent Vectors")
+              length=.15, color='red', label="Tangent Vectors")
     
     # Initialize scatter plot for moving points
-    point_plot, = ax.plot([], [], [], 'ro', label="Query Point")
+    point_plot, = ax.plot([], [], [], 'ro', label="Camera Viewpoint")
     trajectory_line = ax.plot([], [], [], 'b-', alpha=0.5)[0]
     
     def update(frame):
@@ -249,10 +249,26 @@ def animate_query_tangent_vector(S,
         
         return [points_plot] + [trajectory_line]
     
-    ax.set_xlabel("X")
-    ax.set_ylabel("Y")
-    ax.set_zlabel("Z")
-    ax.legend()
+    ax.set_xticks([])  # Remove x-axis ticks
+    ax.set_yticks([])  # Remove y-axis ticks
+    ax.set_zticks([])  # Remove z-axis ticks
+
+    ax.set_xticklabels([])  # Remove x-axis labels
+    ax.set_yticklabels([])  # Remove y-axis labels
+    ax.set_zticklabels([])  # Remove z-axis labels
+
+    ax.grid(False)  # Disable grid
+
+    # Hide the panes (background walls)
+    ax.w_xaxis.pane.fill = False
+    ax.w_yaxis.pane.fill = False
+    ax.w_zaxis.pane.fill = False
+
+    # Hide the axis lines (spines)
+    ax.w_xaxis.line.set_color((1.0, 1.0, 1.0, 0.0))  # Transparent
+    ax.w_yaxis.line.set_color((1.0, 1.0, 1.0, 0.0))
+    ax.w_zaxis.line.set_color((1.0, 1.0, 1.0, 0.0))
+
     ax.set_title("Query Tangent Vectors Motion on the Sphere")
     
     max_range = R_s * 1.2

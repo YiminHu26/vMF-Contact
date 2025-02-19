@@ -16,7 +16,6 @@ from tf2_ros import TransformException
 from tf2_ros.buffer import Buffer
 from tf2_ros.transform_listener import TransformListener
 from tf2_ros import StaticTransformBroadcaster
-from tf2_sensor_msgs.tf2_sensor_msgs import transform_points
 from cv_bridge import CvBridge
 import cv2
 import os, torch
@@ -52,6 +51,9 @@ MOVING_TO_CAMERA_READY = "moving_to_camera_ready"
 FAILED = "failed"
 MOVING = "moving"
 gaze_point_robot = [-0.73, 0.1, 0.1]
+
+SENSOR_FRAME = "camera_color_optical_frame"
+
 
 obj_list = [
    "red cup", "orange cordless drill", "red cheezit box", "purple plum", 
@@ -150,9 +152,10 @@ class AIRNode(Node):
 
         self.camera_ready_pose = list_to_pose_stamped([-0.435, -0.794, 1.381, 0.995, 0.009, 0.005, 0.100], "world") # long finger
         # self.camera_ready_pose = list_to_pose_stamped([-0.435, -0.572, 1.492, 0.995, 0.009, 0.005, 0.100], "world") # small finger
-        self.drop_off_pose: PoseStamped = list_to_pose_stamped([0.15, -0.75, 1.3, 1.0, 0.0, 0.0, 0.0], "world")
+        self.drop_off_pose: PoseStamped = list_to_pose_stamped([0.15, -0.75, 1.4, 1.0, 0.0, 0.0, 0.0], "world")
 
         self.langsam_model = LangSAM(sam_type="sam2.1_hiera_large") if use_langsam and len(obj_list) else None
+        self.input_ready = False
 
     
     def to_camera_ready_pose(self):
@@ -228,16 +231,12 @@ class AIRNode(Node):
                 self.get_logger().info("No camera info received yet, trying again...")
                 time.sleep(1)
         
-        while True:
-            try:
-                pcd_msg_camera = self.last_point_cloud_msg
-                t_robot_2_camera = self.tf_buffer.lookup_transform(
-                    "base_link", pcd_msg_camera.header.frame_id, rclpy.time.Time()
-                )
-                break
-            except TransformException as e:
-                self.get_logger().info("Camera tf-transform not found, trying again...")
-                time.sleep(1)
+ 
+        pcd_msg_camera = self.last_point_cloud_msg
+        t_robot_2_camera = self.tf_buffer.lookup_transform(
+            "base_link", pcd_msg_camera.header.frame_id, rclpy.time.Time()
+        )
+        
 
     def listener_callback_pcd(self, msg: sensor_msgs.PointCloud2):
         """Callback function for the subscriber of the point cloud topic."""
@@ -253,7 +252,7 @@ class AIRNode(Node):
     
     def listener_callback_dpt(self, msg: sensor_msgs.Image):
         """Callback function for the subscriber of the point cloud topic."""
-        self.last_depth_msg = self.bridge.imgmsg_to_cv2(msg, desired_encoding="16UC1") # / 1000.0
+        self.last_depth_msg = msg
         if self.shutdown:
             raise SystemExit
 
@@ -264,6 +263,52 @@ class AIRNode(Node):
         self.image_height = float(msg.height)
         if self.shutdown:
             raise SystemExit
+        
+    def process_point_cloud_and_rgbd_node(self):
+        while True:
+            # TODO: add rgb image processing
+            if self.last_point_cloud_msg is None:
+                self.get_logger().info("No point cloud message received yet.")
+                return
+
+            if self.last_image_msg is None:
+                self.get_logger().info("No image message received yet.")
+                return
+        
+            if self.last_depth_msg is None:
+                self.get_logger().info("No depth message received yet.")
+                return
+
+            # transform the point cloud to base_link frame
+            camera= CameraInfo(
+                width=self.image_width, height=self.image_height, fx=self.camera_matrix[0, 0], fy=self.camera_matrix[1, 1],
+                cx=self.camera_matrix[0, 2], cy=self.camera_matrix[1, 2], scale=1000.0
+            )
+
+            last_depth_msg = self.last_depth_msg
+            stamp = last_depth_msg.header.stamp
+            last_depth_msg = self.bridge.imgmsg_to_cv2(last_depth_msg, desired_encoding="16UC1") # / 1000.0
+
+            pcd_from_depth = create_point_cloud_from_depth_image(last_depth_msg, camera, organized=True).reshape(-1, 3)
+            
+            # Look up for the transformation between base_link and the frame_id of the point cloud
+            t_robot_2_camera = self.tf_buffer.lookup_transform(
+                    "base_link", SENSOR_FRAME, rclpy.time.Time()
+                )
+            
+            self.input_ready = False
+            self.pcd = transform_points(pcd_from_depth, t_robot_2_camera.transform) 
+            self.cam_pose_robot = transform_to_pose(t_robot_2_camera.transform)
+            cam_pos = [self.cam_pose_robot.position.x - gaze_point_robot[0], 
+                    self.cam_pose_robot.position.y - gaze_point_robot[1], 
+                    self.cam_pose_robot.position.z - gaze_point_robot[2]]
+            self.azimuth, self.elevation = pos_to_azi_elev(cam_pos)
+            self.depth = last_depth_msg.astype(np.float32) / 1000.0
+            self.img = self.last_image_msg
+            self.input_ready = True
+
+            # print("depth_msg_stamp: ", stamp)
+            # print("transform_msg_stamp: ", t_robot_2_camera.header.stamp)
 
     def process_point_cloud_and_rgbd(self, save_data=False, pcd_only=False):
         # TODO: add rgb image processing
@@ -280,14 +325,9 @@ class AIRNode(Node):
         if self.last_depth_msg is None:
             self.get_logger().info("No depth message received yet.")
             return [None] * 4, False
-
-        if self.last_point_cloud_msg is None:
-            self.get_logger().info("No camera info message received yet.")
-            return [None] * 4, False
         
         # Get the latest point cloud and image messages
         pcd_msg_camera = self.last_point_cloud_msg
-        img = self.last_image_msg
 
         # transform the point cloud to base_link frame
         camera= CameraInfo(
@@ -300,6 +340,8 @@ class AIRNode(Node):
         t_robot_2_camera = self.tf_buffer.lookup_transform(
                 "base_link", pcd_msg_camera.header.frame_id, rclpy.time.Time()
             )
+        print("depth_msg_stamp: ", pcd_msg_camera.header.stamp)
+        print("transform_msg_stamp: ", t_robot_2_camera.header.stamp)
         pcd_numpy_base_link = transform_points(pcd_from_depth, t_robot_2_camera.transform) 
 
         if pcd_only:
@@ -587,7 +629,7 @@ class AIRNode(Node):
         pregrasp_pose = PoseStamped()
         pregrasp_pose.header = grasp_pose.header
         pregrasp_pose.header.frame_id = "world"
-        pregrasp_pose.pose = self.transform_pose_z(grasp_pose.pose, z_offset=-0.1)
+        pregrasp_pose.pose = self.transform_pose_z(grasp_pose.pose, z_offset=-0.13)
         # print("Pregrasp pose: ", pregrasp_pose)
         return pregrasp_pose
     
