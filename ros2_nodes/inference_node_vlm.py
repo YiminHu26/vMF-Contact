@@ -21,6 +21,7 @@ from pathlib import Path
 
 MOVING_BACK_TO_NBV = "moving_back_to_nbv"
 
+# configurations
 O_RESOLUTION = 40
 O_SIZE = .3
 O_VOXEL_SIZE = O_SIZE / O_RESOLUTION
@@ -30,7 +31,15 @@ angular_vel = 3
 control_rate = 10
 policy_rate = 4
 
-target_object = "baseball"
+TARGET_OBJECT = "yellow peach"
+
+# baselines:
+INITIAL_VIEW_ONLY = False
+TOP_DOWN = True
+
+
+if TOP_DOWN or INITIAL_VIEW_ONLY:
+    WITHOUT_NBV = True
 
 class State:
     def __init__(self, tsdf):
@@ -42,7 +51,8 @@ class AIRNodeVLM(AIRNode):
         super().__init__()
         self.set_vel_acc(.4, .2)
         self.nbv_memory_pose = None
-        self.camera_ready_pose = list_to_pose_stamped([-0.370, -0.612, 1.224, 0.942, 0.007, -0.005, 0.336], "world")
+        if not TOP_DOWN:
+            self.camera_ready_pose = list_to_pose_stamped([-0.370, -0.612, 1.224, 0.942, 0.007, -0.005, 0.336], "world")
         self.gaze_point_robot=np.array([-0.73, 0.1, 0.])
         pcd_center = list_to_pose_stamped(self.gaze_point_robot.tolist() + [0., 0., 0., 1.], "base_link")
         self.publish_new_frame("center", pcd_center)
@@ -65,7 +75,7 @@ class AIRNodeVLM(AIRNode):
         parser = create_parser()
         args = parser.parse_args()
         self.policy:VLMPolicy = make(args.policy, 
-                                     target_object=target_object, 
+                                     target_object=TARGET_OBJECT, 
                                      pcd_center=self.gaze_point_robot,
                                      min_z_dist=min_z_dist)           
         self.user_input_thread = threading.Thread(target=self.handle_user_input)
@@ -84,15 +94,23 @@ class AIRNodeVLM(AIRNode):
 
     def handle_user_input(self):
 
+        # intialize the camera and start capturing sensor data
         self.get_camera_info()
-        # self.to_camera_ready_pose()
+        self.to_camera_ready_pose()
         self.fetch = threading.Thread(target=self.process_point_cloud_and_rgbd_node)
         self.fetch.start()
+
         # Initialize the search policy
         success = CLEAR = False
         self.create_timer(1.0 / 30, self.send_vel_cmd)
         self.create_timer(1.0 / 8, self.grasp_inference)   
         self.rate = self.create_rate(policy_rate)
+
+        # start recording
+        record_orbbec_video(self, "color")
+        record_orbbec_video(self, "depth")
+        self.realsense_thread = threading.Thread(target=record_realsense_video)
+        self.realsense_thread.start()
 
         while not CLEAR:
             self.set_eelink(SENSOR_FRAME)
@@ -124,7 +142,7 @@ class AIRNodeVLM(AIRNode):
             
             if success:
                 self.get_logger().info("Grasp successful.")
-                CLEAR = all([word in self.policy.target_object_curr_label for word in target_object.split(" ")])
+                CLEAR = all([word in self.policy.target_object_curr_label for word in TARGET_OBJECT.split(" ")])
                 self.policy.scene_objects.pop(self.policy.target_object_curr.label, None)
             time.sleep(2)
 
@@ -167,13 +185,15 @@ class AIRNodeVLM(AIRNode):
         else:
             t_robot_2_camera = self.tf_buffer.lookup_transform("base_link", SENSOR_FRAME, rclpy.time.Time()).transform
             x = SpatialTransform.from_matrix(transform_to_matrix(t_robot_2_camera))
-            cmd = self.compute_velocity_cmd(x, linear_vel=linear_vel, angular_vel=angular_vel) 
-
+            if WITHOUT_NBV:
+                cmd = np.zeros(6)
+            else:
+                cmd = self.compute_velocity_cmd(x, linear_vel=linear_vel, angular_vel=angular_vel)
             # publish the view velocity
             pose_robot_2_camera: Pose = transform_to_pose(t_robot_2_camera)
             pose_robot_2_camera_next = apply_transform_to_pose(pose_robot_2_camera, cmd) 
             self.publish_new_frame(f"camera_view_velocity", pose_stamped_from_pose(pose_robot_2_camera_next, "base_link")) 
-            print(f"cmd move scale: {np.linalg.norm(cmd[:3])}")
+            # print(f"cmd move scale: {np.linalg.norm(cmd[:3])}")
             # print(f"cmd angle scale: {np.linalg.norm(cmd[3:])}")
             if np.linalg.norm(cmd[:3]) < 1e-3:
                 self.get_logger().info("NBV reached, set velocity to zero")
@@ -222,8 +242,8 @@ class AIRNodeVLM(AIRNode):
         self.publish_new_frame("pregrasp", pregrasp_pose)
         
         # ask if the user wants to continue
-        user_input = input("Press 'c' to continue or any other key to quit: ")
-        if user_input.lower() == 'c':
+        # user_input = input("Press 'c' to continue or any other key to quit: ")
+        if True:
 
             self.stop_event.clear()
             self.movement_failed_flag.clear()
@@ -349,7 +369,7 @@ class AIRNodeVLM(AIRNode):
                 elif state_machine_state == FAILED:
                     self.get_logger().info("State machine failed")
                     return False
-            return input("Is the grasp successful? (y/n): ").lower() == "y"
+            return False
     
     @property
     def nbv_fields(self):

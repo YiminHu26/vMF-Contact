@@ -5,6 +5,13 @@ from vmf_contact_main.active_grasp.spatial import SpatialTransform
 from scipy.spatial.transform import Rotation as R
 import numpy as np
 import torch
+import cv2
+import os
+from sensor_msgs.msg import Image
+import datetime
+import pyrealsense2 as rs
+
+HOME = str(os.path.expanduser('~'))
 
 # Function to mark duplicates with a number
 def mark_duplicates(labels):
@@ -329,5 +336,139 @@ def _get_mat_from_quat(quaternion: np.ndarray) -> np.ndarray:
          [xXYZ[1]+wXYZ[2], 1.0-(xXYZ[0]+zZ), yYZ[1]-wXYZ[0]],
          [xXYZ[2]-wXYZ[1], yYZ[1]+wXYZ[0], 1.0-(xXYZ[0]+yYZ[0])]])
 
+def color_image_callback(msg, video_writer_info):
+    try:
+        # Convert ROS2 Image message to OpenCV format
+        frame = np.frombuffer(msg.data, dtype=np.uint8).reshape((msg.height, msg.width, -1))
+        if frame.shape[2] == 3:  # If it's a color image
+            frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+        frame_resized = cv2.resize(frame, (640, 480))
+        # Initialize VideoWriter if not already initialized
+        if video_writer_info["writer"] is None:
+            fourcc = cv2.VideoWriter_fourcc(*'XVID')  # Codec for MP4
+            video_writer_info["writer"] = cv2.VideoWriter(
+                video_writer_info["output_file"], fourcc, video_writer_info["fps"], (640, 480)
+            )
+
+        # Write frame to video
+        video_writer_info["writer"].write(frame_resized)
+
+    except Exception as e:
+        print(f"Error processing frame: {e}")
+
+def depth_image_callback(msg, video_writer_info):
+    try:
+        # Convert ROS2 Image message (16-bit depth) to NumPy array
+        frame = np.frombuffer(msg.data, dtype=np.uint16).reshape((msg.height, msg.width))
+
+        # Normalize depth values to 8-bit range (0-255)
+        frame_normalized = cv2.normalize(frame, None, 0, 255, cv2.NORM_MINMAX)
+
+        # Convert to 8-bit grayscale
+        frame_8bit = np.uint8(frame_normalized)
+
+        frame_resized = cv2.resize(frame_8bit, (640, 480))
+
+        if video_writer_info["writer"] is None:
+            fourcc = cv2.VideoWriter_fourcc(*'XVID')
+            video_writer_info["writer"] = cv2.VideoWriter(
+                video_writer_info["output_file"], fourcc, video_writer_info["fps"], (640, 480), isColor=False
+            )
+        video_writer_info["writer"].write(frame_resized)
+
+    except Exception as e:
+        print(f"Error processing depth frame: {e}")
+
+def record_orbbec_video(node, topic_name="color", fps=30):
+
+    start_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    filename = f"{HOME}/Desktop/Orbbec_{topic_name}_{start_time}.avi"
+
+    # Dictionary to store video writer info
+    video_writer_info = {"writer": None, "output_file": filename, "fps": fps}
+
+    if topic_name == "color":
+        # Subscribe to the image topic
+        subscription = node.create_subscription(
+            Image,
+            "/camera/" + topic_name + "/image_raw",
+            lambda msg: color_image_callback(msg, video_writer_info),
+            10
+        )
+        print(f"Recording video from ROS 2 topic: {topic_name}, saving to {filename}...")
+    elif topic_name == "depth":
+        # Subscribe to the depth image topic
+        subscription = node.create_subscription(
+            Image,
+            "/camera/" + topic_name + "/image_raw",
+            lambda msg: depth_image_callback(msg, video_writer_info),
+            10
+        )
+        print(f"Recording depth video from ROS 2 topic: {topic_name}, saving to {filename}...")
+
+def record_realsense_video():
+
+    # Initialize RealSense pipelines for multiple cameras
+    pipelines = []
+    video_writers = []
+    serials = []
+
+    # Get a list of connected devices
+    context = rs.context()
+    devices = context.query_devices()
+
+    if not devices:
+        raise RuntimeError("No RealSense cameras found.")
+
+    start_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+
+    for device in devices:
+        serial = device.get_info(rs.camera_info.serial_number)
+        serials.append(serial)
+        pipeline = rs.pipeline()
+        config = rs.config()
+        config.enable_device(serial)
+        config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
+        pipeline.start(config)
+        pipelines.append(pipeline)
+
+        # Generate video filename based on device serial
+        video_filename = f"{HOME}/Desktop/Realsense_{start_time}.avi"
+
+        # Define the codec and create VideoWriter object
+        fourcc = cv2.VideoWriter_fourcc(*'XVID')
+        out = cv2.VideoWriter(video_filename, fourcc, 30.0, (640, 480))
+        video_writers.append(out)
+
+    try:
+        while True:
+            for i, pipeline in enumerate(pipelines):
+                frames = pipeline.wait_for_frames()
+                color_frame = frames.get_color_frame()
+                if not color_frame:
+                    continue
+
+                # Convert image to numpy array
+                color_image = np.asanyarray(color_frame.get_data())
+
+                # Check if the file has been removed and recreate it
+                if not os.path.exists(video_filename):
+                    video_writers[i].release()
+                    video_writers[i] = cv2.VideoWriter(video_filename, fourcc, 30.0, (640, 480))
+
+                # Write the frame to the video file
+                video_writers[i].write(color_image)
+
+                # # Show the frame (optional)
+                # cv2.imshow(f'RealSense Video {i}', color_image)
+
+    finally:
+        # Stop recording
+        for out in video_writers:
+            out.release()
+        for pipeline in pipelines:
+            pipeline.stop()
+        cv2.destroyAllWindows()
+        print("Recording stopped.")
 
 

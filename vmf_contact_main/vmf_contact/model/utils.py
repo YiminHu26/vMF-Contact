@@ -5,7 +5,29 @@ from typing import Optional, Tuple, Union
 import math
 import numpy as np 
 import open3d as o3d   
+
+
+def group_and_sum(A, B, C):
+   # Example input tensors
+    # A: shape (N, K), B: indices to select rows from A, C: group IDs
+    selected_A = A[B]
+
+    # Find unique group IDs and their corresponding indices
+    unique_C, inverse_indices, counts = torch.unique(C, return_inverse=True, return_counts=True)
+
+    # Initialize tensor to store summed values
+    M = unique_C.shape[0]
+    K = A.shape[1] if len(A.shape) > 1 else 1
+    grouped_A = torch.zeros((M, K), dtype=A.dtype, device=A.device)
+
+    # Sum elements based on group ID using scatter_add_
+    grouped_A.scatter_add_(0, inverse_indices.unsqueeze(1).expand(-1, K), selected_A)
+
+    counts = counts.unsqueeze(-1)
     
+    return grouped_A, unique_C, counts
+
+
 def _sqrt_positive_part(x: torch.Tensor) -> torch.Tensor:
     """
     Returns torch.sqrt(torch.max(0, x))
@@ -1113,13 +1135,13 @@ def draw_grasps(cp, cp2, approach, bin_vectors=None, score=None, kappa=None,
                 arm_length=0.02, sphere_radius=1e-5):
     
     vis_list = []
-    color_max = np.array([0, 0, 1])  # Light red (RGB)
+    color_max = np.array([0, 0, 1])
     color_min = np.array([1, 0, 0])
     cp_half = (cp + cp2) / 2
 
     # normalize the score
     if score is not None:
-        score = (score - score.min()) / (score.max() - score.min()) if score.max() != score.min() else score
+        score = (score - score.min()) / (score.max() - score.min() + 1e-6)
 
     if cp is not None and cp2 is not None:
         for i, (q, a, app, half_q, half_a) in enumerate(zip(cp, cp2, approach, 

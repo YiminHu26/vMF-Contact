@@ -11,7 +11,7 @@ import time
 import cv2
 from .vlm_prompts import *
 from .img_bbox_utils import *
-from .vlm_relation import compile_relation
+from .vlm_relation import compile_relation, match_sentences
 from .vlm_prompts import crop_max_and_rotate
 from matplotlib import pyplot as plt
 import time
@@ -113,6 +113,7 @@ class VLMAgent():
                     if obj_label in scene_obj.label:
                         self.ordered_grasp_list.append(scene_obj)
                         break
+    
 
     def generate_langsam(self, pcd, img, vlm_description_dict):
 
@@ -157,45 +158,40 @@ class VLMAgent():
         print("[VLM]: Results from LangSAM: ", labels)
         print("[VLM]: Scores: ", scores)
 
-        self.scene_objects = {}
+        scene_objects = {}
+        # match labels with VLM output
+        match_indecies = match_sentences(labels, vlm_label_list)
+        # prepare visualization
         vis_list = []
         pcd_colors = generate_distinct_colors(len(labels))
 
-        # # remove previous image
-        # if os.path.exists(f"{current_file_folder}/"):
-        #     for file in os.listdir(f"{current_file_folder}/"):
-        #         if file.endswith(".jpg"):
-        #             os.remove(f"{current_file_folder}/{file}")
-
         for i, langsam_label in enumerate(labels):
             # only the first instance of the object is considered
-            if not "1" in langsam_label:
-                print(f"[VLM]: Skipping {langsam_label} as it is not the first instance.")
+            if not "1" in langsam_label or match_indecies[i] == -1:
+                print(f"[VLM]: Skipping {langsam_label}.")
                 continue
 
             # mask image and point cloud
             mask = masks[i].astype(np.uint8)[:, :, None]
             pcd_masked = pcd[mask.reshape(-1) == 1]
+
             # filter out noises out of range:
             pcd_masked = pcd_masked[(pcd_masked[:, 2] > 0.02) & (pcd_masked[:, 2] < 0.3)]
             if len(pcd_masked) == 0:
                 print(f"[VLM]: No valid points in the masked point cloud for {langsam_label}.")
                 continue
 
-            # find adjectives for the object from the VLM output
-            adj_list = None
-            for vlm_label in vlm_label_list:
-                if all(word.lower() in vlm_label.lower() for word in langsam_label[:-2].split(" ")):
-                    adj_list = vlm_description_dict[vlm_label]
-                    vlm_label_list.remove(vlm_label) 
-                    break
+            # find adjectives for the object from the VLM output         
+            vlm_label = vlm_label_list[match_indecies[i]]   
+            adj_list = vlm_description_dict[vlm_label]
+
+            # check if there are adjectives
             if adj_list is None:
                 print(f"[VLM]: No adjectives found for {langsam_label}, set as empty list.")
             
             # compile scene object
             scene_object = SceneObject(pcd_masked, langsam_label, adj_list)
-            self.scene_objects[langsam_label] = scene_object
-            # print(str(scene_object))
+            scene_objects[langsam_label] = scene_object
 
             # visualize the scene object
             vis_list += visualize_pcd_with_obb(pcd_masked, scene_object.bbox_3d, pcd_colors[i])
@@ -204,7 +200,7 @@ class VLMAgent():
             # cv2.imwrite(f"{current_file_folder}/{langsam_label}.jpg", img[..., ::-1] * mask)
         
         # o3d.visualization.draw_geometries(vis_list)
-    
+        self.scene_objects = scene_objects
     
     def set_vlm_cmd(self, vlm_cmd):
         print("[VLM]: Switching to VLM command:", vlm_cmd)

@@ -115,14 +115,15 @@ def return_prompt_scene(img, target_object):
                     - `"descriptors"`: **An array containing exactly three adjectives or descriptive phrases** (e.g., `["red", "plastic", "near box"]`).
                 - **No extra text, explanations, or chain-of-thought reasoning** should appear in the final output. \n
                
-              """ 
-              + f"""
-              4. **Important**
-                - **Please put a special focus on the object: {target_object}**. If it is detected, ensure to put it as the first dictionary.  
-                - **Background object such as table should not be included** 
-                \n
-              """ 
-              + """
+              """ +  
+              # + f"""
+              # 4. **Important**
+              #   - **Please put a special focus on the object: {target_object}**. If it is detected, ensure to put it as the first dictionary.  
+              #   - **Background object such as table should not be included** 
+              #   \n
+              # """ 
+              # + 
+              """
               ### **Final Output Example**
               ```json
               [

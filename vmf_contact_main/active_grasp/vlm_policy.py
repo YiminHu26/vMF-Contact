@@ -183,7 +183,7 @@ class VLMPolicy(MultiViewPolicy):
         while not self.nbv_reached:
             # wait for the NBV fields to be generated
             print(f"[Policy]: Waiting for the NBV to be reached ...")
-            if time.time() - time_curr > 15:
+            if time.time() - time_curr > 25:
                 break
             time.sleep(3)
         print(f"[Policy]: NBV is reached.")
@@ -237,33 +237,22 @@ class VLMPolicy(MultiViewPolicy):
                 # print(f"[vMF-Contact] Time taken for grasp inference: {time.time() - time_curr}")
 
 
-    def best_grasp_prediction_is_stable(self, sort_by="graspness", sample_num=3):
+    def best_grasp_prediction_is_stable(self, sort_by="graspness"):
         if self.target_object_curr is not None:
                 # get the current pcd of the target object
             pcd_from_prompt=self.target_object_curr.pcd
             
             # get the best grasp prediction on the target object
-            poses, kappa, graspness = self.grasp_buffer.get_pose_fused(pcd_from_prompt=pcd_from_prompt)
+            self.best_grasp = self.grasp_buffer.get_pose_fused_best(sort_by=sort_by, pcd_from_prompt=pcd_from_prompt)
 
-            if len(poses) == 0:
+            if self.best_grasp is None:
                 print(f"[vMF-Contact]: No grasp prediction on object: {self.target_object_curr_label}, even if it's found.")
                 self.vlm_agent.set_vlm_cmd("ordered_grasp")
                 return False
-                                        
-            # sort by kappa or graspness
-            score = kappa if sort_by == "kappa" else graspness
-    
-            #sort poses by criterion
-            sample_num = min(sample_num, poses.size(0))
-            poses_candidates = poses[torch.argsort(score, descending=True)][:sample_num]
-
-            #randomly sample 1 poses
-            pose_chosen = poses_candidates[random.randint(0, sample_num-1)].squeeze(0)
-            self.best_grasp = pose_chosen
-
+            
             print(f"[vMF-Contact]: Best grasp prediction on object: {self.target_object_curr_label}, identified.")
-
             return True
+        
         print(f"[vMF-Contact]: No target object found on object: {self.target_object_curr_label}")
         return False
     

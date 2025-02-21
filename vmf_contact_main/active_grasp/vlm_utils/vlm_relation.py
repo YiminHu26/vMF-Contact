@@ -1,8 +1,8 @@
-from .img_bbox_utils import SceneObject
 import numpy as np
 from typing import List
-from .img_bbox_utils import obb_collision_expanded
-import random
+import sys
+from .img_bbox_utils import obb_collision_expanded, SceneObject
+from Levenshtein import distance
 
 class SceneConstraints:
     """
@@ -111,7 +111,7 @@ class SceneConstraints:
         return relations
 
 
-def compile_relation(scene_objects: List[SceneObject], 
+def compile_relation(scene_objects, 
                      bbox_expansion=0.0):
     for curr_obj in scene_objects:
         curr_obj.relations = []
@@ -130,6 +130,52 @@ def compile_relation(scene_objects: List[SceneObject],
             curr_obj.relations += checker.identify_relation(curr_obj, robj)
         curr_obj.relations += checker.identify_between_relations(curr_obj, related_objs)
 
-        # print(f"[VLM]: Relations for {curr_obj.label}: {curr_obj.relations}")
+        print(f"[VLM]: Relations for {curr_obj.label}: {curr_obj.relations}")
 
-        
+
+def match_sentences(hypotheses, references):
+    """
+    Matches each hypothesis in A to the best reference in B using manually computed Levenshtein distance.
+    Ensures 1-to-1 mapping with improved accuracy.
+
+    Args:
+        hypotheses (list of str): The generated phrases (A).
+        references (list of str): The actual target phrases (B).
+
+    Returns:
+        list: List of indexes corresponding to the best match in B for each sentence in A,
+              or -1 if no match is found.
+    """
+    best_matches = [-1] * len(hypotheses)  # Initialize matches as -1
+    used_indices = set()  # Track used references
+
+    for a_idx, hyp in enumerate(hypotheses):
+        best_index = -1
+        min_distance = float('inf')  # Initialize with a large number
+
+        for b_idx, ref in enumerate(references):
+            if b_idx in used_indices:  # Ensure 1-to-1 mapping
+                continue
+
+            # Remove numbers and extra characters to improve matching accuracy
+            hyp_clean = ''.join([c for c in hyp if not c.isdigit()]).strip()
+            ref_clean = ''.join([c for c in ref if not c.isdigit()]).strip()
+
+            # Compute Levenshtein distance on cleaned text
+            dist = distance(hyp_clean, ref_clean)
+
+            if dist < min_distance:
+                min_distance = dist
+                best_index = b_idx
+
+        if best_index != -1 and min_distance < len(hyp) * 0.5:  # Threshold to avoid incorrect matches
+            best_matches[a_idx] = best_index
+            used_indices.add(best_index)  # Mark this reference as used
+
+    return best_matches
+
+# A = ['yellow banana 1', 'blue rubik cube 1', 'orange drill 1', 'green iron 1', 'cube 1', 'white socket 1']
+# B = ['orange drill', 'blue rubik"se', 'yellow banana', 'gon', 'white socket']
+
+# match_indecies = match_sentences(A, B)
+# print(match_indecies)

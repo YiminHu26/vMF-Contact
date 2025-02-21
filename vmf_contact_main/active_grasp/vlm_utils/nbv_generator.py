@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
+import matplotlib.animation as animation
+from functools import partial
 
 truncate=np.pi/3
 # np.random.seed(42)
@@ -143,12 +144,18 @@ def generate_upward_tangent_vector(S, P_q):
     tangent_vector /= np.linalg.norm(tangent_vector) + 1e-6
     return tangent_vector
 
+def generate_tangent_vector_towards_opposite(S, P_q):
+    """
+    Generates a tangent vector that always points towards the opposite side of the sphere.
+    """
+    radial_vector = P_q - S
+    radial_vector /= np.linalg.norm(radial_vector) + 1e-6
+    
+    up_vector = np.array([0, 0, 1])  # Global upward direction
+    tangent_vector = np.cross(np.cross(radial_vector, up_vector), radial_vector)
+    tangent_vector /= np.linalg.norm(tangent_vector) + 1e-6
+    return -tangent_vector
 
-import matplotlib.animation as animation
-import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib.animation as animation
-from functools import partial
 
 def animate_query_tangent_vectors(S, R_s, Ps_num=2):
     """

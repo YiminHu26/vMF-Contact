@@ -13,12 +13,14 @@ import torch.nn.functional as F
 import random
 from vmf_contact.model.utils import *
 from vmf_contact.nn.util import match
-from .matching import *
+from .utils import group_and_sum
 import copy
 
 Device = Union[str, torch.device]
 INTEG = True
 normal_o3d_vis = False
+
+pcd_from_prompt_matching_th = 0.005
 
 class GraspBuffer:
     def __init__(self, device="cuda:0"):
@@ -48,6 +50,50 @@ class GraspBuffer:
         else:
             self.vis = o3d.visualization.Visualizer()
             self.vis.create_window()
+    
+    def set_view(self):
+        """Set a specific viewpoint."""
+        ctr = self.vis.get_view_control()
+
+        # Set camera parameters
+        ctr.set_zoom(.7)  # Zoom factor
+        ctr.set_lookat(self.view_center)  # Look at center
+        ctr.set_front([5, 0, 0])  # View direction
+        ctr.set_up([0, 0, 1])  # Up vector
+
+    def vis_grasps(self, use_normal_vis=False):
+
+        if len(self.buffer_dict["pcds"]) == 0:
+            print("Buffer is empty, no grasp to visualize")
+            return
+
+        pcd = self.get_pcds_curr()
+        baseline, approach, cp, grasp_width, kappa, graspness = self.get_grasp_fused() # self.get_grasp_curr()
+        cp2 = cp + grasp_width * baseline        
+        
+        vis_list = vis_grasps(
+                    samples=pcd,
+                    cp=cp,
+                    cp2=cp2,
+                    kappa=kappa,
+                    approach=approach,
+                    score = graspness,
+                )
+        
+        if not hasattr(self, "vis"):
+            self.create_vis()
+            self.view_center = pcd.mean(0).cpu().numpy()
+            
+        if self.vis is None or use_normal_vis:
+            o3d.visualization.draw_geometries(vis_list)
+        else:
+            self.vis.clear_geometries()
+            for geom in vis_list:
+                self.vis.add_geometry(geom)
+            # Update the visualizer
+            self.vis.poll_events()
+            self.vis.update_renderer()
+            self.set_view()
 
     def update(self, 
                pcds, 
@@ -80,12 +126,8 @@ class GraspBuffer:
         filter = filter.squeeze(-1)
 
         if pcd_from_prompt is not None:
-            pcd_from_prompt = torch.tensor(pcd_from_prompt, device=pcds.device, dtype=torch.float32)
-            # calculate the distance between the contact points and the prompt points
-            dist = torch.cdist(cp, pcd_from_prompt)
-            # dist2 = torch.cdist(cp2, pcd_from_prompt)
-            filter = filter & (dist.min(1).values < 0.002)
-        
+            filter = filter & self.filter_grasps_by_pcd(cp, pcd_from_prompt)
+
         pcds = pcds * resize + shift
 
         if filter.sum() == 0:
@@ -155,7 +197,7 @@ class GraspBuffer:
                 
                 kappa[i] = (kappa[similar_grasps]).sum()
                 
-                graspness[i] = graspness[similar_grasps].sum()
+                graspness[i] = graspness[similar_grasps].mean()
 
                 # Mark similar grasps as duplicates
                 unique_indices[similar_grasps] = i
@@ -198,7 +240,6 @@ class GraspBuffer:
         # Bayesian update on the fused approach using Dirichlet distribution
         bin_score_sum, unique_indices, counts = group_and_sum(bin_score, cp_matched, cp_fused_matched)
         self.bin_score_fused[unique_indices] = self.bin_score_fused[unique_indices] + bin_score_sum
-    
     
     def integrate(self, baseline, bin_score, cp, grasp_width, kappa, graspness, dist_th_pcd=0.02, dist_th_baseline = 0.86):
         if self.baseline_fused is None:
@@ -251,14 +292,14 @@ class GraspBuffer:
             self.graspness_fused = torch.cat((self.graspness_fused, graspness_new), dim=0)
 
             # print(f"Total grasp number after fusion: {len(self.cp_fused)}")
-  
-    def get_pcds_all(self):
-        return torch.cat(self.buffer_dict["pcds"], dim=0)
     
     def approach_from_bin_score(self, bin_score, baseline):
         bin_num = bin_score.shape[-1]
         bin_vectors = rotate_circle_to_batch_of_vectors(bin_num, baseline)
         return torch.gather(bin_vectors, 1, bin_score.argmax(dim=-1, keepdim=True)[...,None].expand(-1, -1, 3)).squeeze(1)
+    
+    def get_pcds_all(self):
+        return torch.cat(self.buffer_dict["pcds"], dim=0)
     
     def get_grasp_all(self):
         baselines = torch.cat(self.buffer_dict["baselines"], dim=0)
@@ -278,19 +319,60 @@ class GraspBuffer:
                                       convention=convention)
         return poses, kappa, graspness
     
+    def get_pcds_curr(self):
+        return self.buffer_dict["pcds"][-1]
+    
+    def get_grasp_curr(self, pcd_from_prompt=None):
+        baseline = self.buffer_dict["baselines"][-1]
+        approach = self.buffer_dict["approaches"][-1]
+        cp = self.buffer_dict["cp"][-1]
+        grasp_width = self.buffer_dict["grasp_width"][-1]
+        kappa = self.buffer_dict["kappa"][-1]
+        graspness = self.buffer_dict["graspness"][-1]
+
+        if pcd_from_prompt is not None:
+            filter = self.filter_grasps_by_pcd(cp, pcd_from_prompt)
+            baseline = baseline[filter]
+            approach = approach[filter]
+            cp = cp[filter]
+            grasp_width = grasp_width[filter]
+            kappa = kappa[filter]
+            graspness = graspness[filter]
+
+        return baseline, approach, cp, grasp_width, kappa, graspness
+    
+    def get_pose_curr(self, convention="xzy", pcd_from_prompt=None):
+        baseline, approach, cp, grasp_width, kappa, graspness = self.get_grasp_curr(pcd_from_prompt)
+        cp2 = cp + grasp_width * baseline
+        poses = rotation_from_contact(baseline=baseline, 
+                                      approach=approach, 
+                                      translation=(cp+cp2)/2,
+                                      convention=convention)
+        return poses, kappa, graspness
+    
+    def get_pose_curr_best(self, 
+                           convention="xzy", 
+                           sort_by="kappa", 
+                           sample_num=1,
+                           pcd_from_prompt=None
+                           ):
+
+        return self.get_pose_best(convention, 
+                                  sort_by, 
+                                  sample_num, 
+                                  pcd_from_prompt, 
+                                  pose_fused=False
+                                  )
+    
     def get_grasp_fused(self, pcd_from_prompt=None):
         filter = self.graspness_fused > self.graspness_fused.max() * 0.0
         #filter = filter & (self.kappa_fused > self.kappa_fused.max() * 0.5)
         filter = filter.squeeze(-1)
 
         if pcd_from_prompt is not None:
-            pcd_from_prompt = torch.tensor(pcd_from_prompt, device=self.cp_fused.device, dtype=torch.float32)
-            # calculate the distance between the contact points and the prompt points
-            dist = torch.cdist(self.cp_fused, pcd_from_prompt)
-            filter = filter & (dist.min(1).values < 0.002)
+            filter = filter & self.filter_grasps_by_pcd(self.cp_fused, pcd_from_prompt)
 
         approach_fused = self.approach_from_bin_score(self.bin_score_fused, self.baseline_fused)
-
         baseline = self.baseline_fused[filter]
         approach = approach_fused[filter]
         cp = self.cp_fused[filter]
@@ -299,27 +381,6 @@ class GraspBuffer:
         graspness = self.graspness_fused[filter]
         return baseline, approach, cp, grasp_width, kappa, graspness
     
-    def get_pcds_curr(self):
-        return self.buffer_dict["pcds"][-1]
-    
-    def get_grasp_curr(self):
-        baseline = self.buffer_dict["baselines"][-1]
-        approach = self.buffer_dict["approaches"][-1]
-        cp = self.buffer_dict["cp"][-1]
-        grasp_width = self.buffer_dict["grasp_width"][-1]
-        kappa = self.buffer_dict["kappa"][-1]
-        graspness = self.buffer_dict["graspness"][-1]
-        return baseline, approach, cp, grasp_width, kappa, graspness
-    
-    def get_pose_curr(self, convention="xzy"):
-        baseline, approach, cp, grasp_width, kappa, graspness = self.get_grasp_curr()
-        cp2 = cp + grasp_width * baseline
-        poses = rotation_from_contact(baseline=baseline, 
-                                      approach=approach, 
-                                      translation=(cp+cp2)/2,
-                                      convention=convention)
-        return poses, kappa, graspness
-    
     def get_pose_fused(self, convention="xzy", pcd_from_prompt=None):
         baseline, approach, cp, grasp_width, kappa, graspness = self.get_grasp_fused(pcd_from_prompt)
         cp2 = cp + grasp_width * baseline
@@ -327,89 +388,70 @@ class GraspBuffer:
                                       approach=approach, 
                                       translation=(cp+cp2)/2,
                                       convention=convention)
+        if len(poses) == 0:
+            pcd_from_prompt_vis = o3d.geometry.PointCloud()
+            pcd_from_prompt_vis.points = o3d.utility.Vector3dVector(pcd_from_prompt)
+            pcd_from_prompt_vis.paint_uniform_color([0, 0, 1])
+            pcd_vis = o3d.geometry.PointCloud()
+            pcd_vis.points = o3d.utility.Vector3dVector(cp.cpu().numpy())
+            pcd_vis.paint_uniform_color([1, 0, 0])
+            o3d.visualization.draw_geometries([pcd_from_prompt_vis, pcd_vis])
+            print("No grasp found")
+        
         return poses, kappa, graspness
     
-    def set_view(self):
-        """Set a specific viewpoint."""
-        ctr = self.vis.get_view_control()
-
-        # Set camera parameters
-        ctr.set_zoom(.7)  # Zoom factor
-        ctr.set_lookat(self.view_center)  # Look at center
-        ctr.set_front([-5, 0, 1])  # View direction
-        ctr.set_up([0, 0, 1])  # Up vector
-    
-    def vis_grasps(self, use_normal_vis=False):
-
-        if len(self.buffer_dict["pcds"]) == 0:
-            print("Buffer is empty, no grasp to visualize")
-            return
-
-        pcd = self.get_pcds_curr()
-        baseline, approach, cp, grasp_width, kappa, graspness = self.get_grasp_fused() # self.get_grasp_curr()
-        cp2 = cp + grasp_width * baseline        
+    def filter_grasps_by_pcd(self, cp, pcd_from_prompt):
+        # pcd_vis = o3d.geometry.PointCloud()
+        # pcd_vis.points = o3d.utility.Vector3dVector(pcd_from_prompt)
+        # o3d.visualization.draw_geometries([pcd_vis])
         
-        vis_list = vis_grasps(
-                    samples=pcd,
-                    cp=cp,
-                    cp2=cp2,
-                    kappa=kappa,
-                    approach=approach,
-                    score = graspness,
-                )
-        
-        if not hasattr(self, "vis"):
-            self.create_vis()
-            self.view_center = pcd.mean(0).cpu().numpy()
-            
-        if self.vis is None or use_normal_vis:
-            o3d.visualization.draw_geometries(vis_list)
-        else:
-            self.set_view()
-            self.vis.clear_geometries()
-            for geom in vis_list:
-                self.vis.add_geometry(geom)
-            # Update the visualizer
-            self.vis.poll_events()
-            self.vis.update_renderer()            
-
-    def get_pose_curr_best(self, convention="xzy", sort_by="kappa", sample_num=1):
-
-        if len(self.buffer_dict["pcds"]) == 0:
-            print("Buffer is empty, no grasp to choose")
-            return None
-        
-        poses, kappa, graspness = self.get_pose_curr(convention)
-        
-        score = kappa if sort_by == "kappa" else graspness
-        
-        #sort poses by criterion
-        sample_num = min(sample_num, poses.size(0))
-        poses_candidates = poses[torch.argsort(score, descending=True)][:sample_num]
-
-        #randomly sample 1 poses
-        pose_chosen = poses_candidates[random.randint(0, sample_num-1)].squeeze(0)
-        return pose_chosen
+        pcd_from_prompt = torch.tensor(pcd_from_prompt, device=cp.device, dtype=torch.float32)
+        # calculate the distance between the contact points and the prompt points
+        dist = torch.cdist(cp, pcd_from_prompt)
+        print("Shortest distances between prompted pcd and grasps:",dist.min(1).values)
+        filter = dist.min(1).values < pcd_from_prompt_matching_th
+        return filter
     
     def get_pose_fused_best(self, 
                             convention="xzy", 
-                            sort_by="kappa", 
+                            sort_by="graspness", 
                             sample_num=1,
                             pcd_from_prompt=None
                             ):
 
+        return self.get_pose_best(convention, 
+                                  sort_by, 
+                                  sample_num, 
+                                  pcd_from_prompt)
+    
+    def get_pose_best(self, 
+                convention="xzy", 
+                sort_by="graspness", 
+                sample_num=1,
+                pcd_from_prompt=None,
+                pose_fused=True
+                ):
         if len(self.buffer_dict["pcds"]) == 0:
             print("Buffer is empty, no grasp to choose")
             return None
         
-        poses, kappa, graspness = self.get_pose_fused(convention, pcd_from_prompt)
+        poses, kappa, graspness = self.get_pose_fused(convention, pcd_from_prompt) if pose_fused else self.get_pose_curr(convention, pcd_from_prompt)
+        
+        if len(poses) == 0:
+            print("No grasp found")
+            return None
+        
+        kappa = kappa.squeeze(-1)
+        graspness = graspness.squeeze(-1)
         
         score = kappa if sort_by == "kappa" else graspness
         
         #sort poses by criterion
         sample_num = min(sample_num, poses.size(0))
+                
         poses_candidates = poses[torch.argsort(score, descending=True)][:sample_num]
 
         #randomly sample 1 poses
         pose_chosen = poses_candidates[random.randint(0, sample_num-1)].squeeze(0)
         return pose_chosen
+        
