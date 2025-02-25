@@ -537,14 +537,18 @@ class vmfContactLightningModule(pl.LightningModule):
         shift=0.0,
         resize=1.0, 
         sample_num=1,
-        grasp_height_th=5e-3,
+        grasp_height_th=1e-2,
         grasp_width_th=0.15,
-        graspness_th=0.3,
+        graspness_th=0.,
         pcd_from_prompt=None,
         convention="xzy",
         vis=False,
         use_normal_vis=False
         ):
+        if len(pcd) == 0:
+            # print("No valid point cloud, skipping inference")
+            return None
+        
         pcd = torch.tensor(pcd, device=self.device, dtype=torch.float32)
         assert pcd.size(-1) == 3
         if pcd.dim() == 3:

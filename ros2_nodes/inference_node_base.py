@@ -252,7 +252,7 @@ class AIRNode(Node):
     
     def listener_callback_dpt(self, msg: sensor_msgs.Image):
         """Callback function for the subscriber of the point cloud topic."""
-        self.last_depth_msg = msg
+        self.last_depth_msg = self.bridge.imgmsg_to_cv2(msg, desired_encoding="16UC1") # / 1000.0
         if self.shutdown:
             raise SystemExit
 
@@ -286,8 +286,7 @@ class AIRNode(Node):
             )
 
             last_depth_msg = self.last_depth_msg
-            stamp = last_depth_msg.header.stamp
-            last_depth_msg = self.bridge.imgmsg_to_cv2(last_depth_msg, desired_encoding="16UC1") # / 1000.0
+            # stamp = last_depth_msg.header.stamp
 
             pcd_from_depth = create_point_cloud_from_depth_image(last_depth_msg, camera, organized=True).reshape(-1, 3)
             
@@ -309,6 +308,13 @@ class AIRNode(Node):
 
             # print("depth_msg_stamp: ", stamp)
             # print("transform_msg_stamp: ", t_robot_2_camera.header.stamp)
+    
+    def record_videos(self):
+        # start recording
+        record_orbbec_video(self, "color")
+        record_orbbec_video(self, "depth")
+        self.realsense_thread = threading.Thread(target=record_realsense_video)
+        self.realsense_thread.start()
 
     def process_point_cloud_and_rgbd(self, save_data=False, pcd_only=False):
         # TODO: add rgb image processing

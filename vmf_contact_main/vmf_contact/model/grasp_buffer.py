@@ -14,6 +14,7 @@ import random
 from vmf_contact.model.utils import *
 from vmf_contact.nn.util import match
 from .utils import group_and_sum
+from sklearn.cluster import DBSCAN
 import copy
 
 Device = Union[str, torch.device]
@@ -25,6 +26,7 @@ pcd_from_prompt_matching_th = 0.005
 class GraspBuffer:
     def __init__(self, device="cuda:0"):
         self.clear()
+        self.dbscan = DBSCAN(eps=1.0, min_samples=1, metric='precomputed')
 
     def clear(self):
         self.buffer_dict = {
@@ -61,14 +63,18 @@ class GraspBuffer:
         ctr.set_front([5, 0, 0])  # View direction
         ctr.set_up([0, 0, 1])  # Up vector
 
-    def vis_grasps(self, use_normal_vis=False):
+    def vis_grasps(self, use_normal_vis=False, pose_fused=False):
 
         if len(self.buffer_dict["pcds"]) == 0:
             print("Buffer is empty, no grasp to visualize")
             return
 
         pcd = self.get_pcds_curr()
-        baseline, approach, cp, grasp_width, kappa, graspness = self.get_grasp_fused() # self.get_grasp_curr()
+
+        if pose_fused:
+            baseline, approach, cp, grasp_width, kappa, graspness = self.get_grasp_fused()
+        else:
+            baseline, approach, cp, grasp_width, kappa, graspness = self.get_grasp_curr()
         cp2 = cp + grasp_width * baseline        
         
         vis_list = vis_grasps(
@@ -163,25 +169,28 @@ class GraspBuffer:
         
     def self_merge_grasps(self, cp, grasp_width, baseline, bin_score, kappa, graspness, dist_th_pcd, dist_th_baseline):
         """
-        Merge similar grasps based on Euclidean distance and cosine similarity.
+        Merge similar grasps based on Euclidean distance and cosine similarity using DBSCAN clustering.
         """
         num_grasps = cp.shape[0]
 
+        cp2 = cp + grasp_width * baseline
+
         # Compute Euclidean distance between all grasps
         cp_dist = torch.cdist(cp, cp)  # Shape: (num_grasps, num_grasps)
+        cp2_dist = torch.cdist(cp, cp2)  # Shape: (num_grasps, num_grasps)
 
         # Compute cosine similarity between approach vectors
         baseline_dist = torch.mm(baseline, baseline.T).abs()  # Shape: (num_grasps, num_grasps)
 
         # Identify redundant grasps (low distance and high cosine similarity)
-        redundant_mask = (cp_dist < dist_th_pcd) & (baseline_dist > dist_th_baseline)
+        redundant_mask = ((cp_dist < dist_th_pcd) | (cp2_dist < dist_th_pcd)) & (baseline_dist > dist_th_baseline)
         
         # Get unique indices
         unique_indices = torch.arange(num_grasps)
         
         # Keep only unique grasps
         for i in range(num_grasps):
-            if redundant_mask[i].any():
+            if redundant_mask[i].any() and unique_indices[i] == i:
                 similar_grasps = torch.where(redundant_mask[i])[0]
                 # Merge similar grasps by taking the weighted average
                 cp[i] = (cp[similar_grasps] * graspness[similar_grasps]).sum(dim=0) / graspness[similar_grasps].sum()
@@ -256,9 +265,12 @@ class GraspBuffer:
             return
 
         cp_dist = torch.cdist(self.cp_fused, cp)
+        cp2 = cp + grasp_width * baseline
+        cp2_dist = torch.cdist(self.cp_fused, cp2)
+
         baseline_dist = torch.mm(self.baseline_fused, baseline.T).abs() # cosine similarity
         # minmum distance between the current grasp and new discovered grasp over threshold will be integrated
-        new_grasp_idx = (cp_dist > dist_th_pcd) & (baseline_dist < dist_th_baseline)
+        new_grasp_idx = (cp_dist > dist_th_pcd) & (cp2_dist > dist_th_pcd) & (baseline_dist < dist_th_baseline)
         # new grasps should be different from all the fused grasps
         new_grasp_idx = new_grasp_idx.all(dim=0)
         # match the grasps lower than the threshold with the old grasps, perform bayesian update
@@ -393,9 +405,14 @@ class GraspBuffer:
             pcd_from_prompt_vis.points = o3d.utility.Vector3dVector(pcd_from_prompt)
             pcd_from_prompt_vis.paint_uniform_color([0, 0, 1])
             pcd_vis = o3d.geometry.PointCloud()
-            pcd_vis.points = o3d.utility.Vector3dVector(cp.cpu().numpy())
+            pcd_vis.points = o3d.utility.Vector3dVector(self.cp_fused.cpu().numpy())
             pcd_vis.paint_uniform_color([1, 0, 0])
-            o3d.visualization.draw_geometries([pcd_from_prompt_vis, pcd_vis])
+            pcd_all_vis = o3d.geometry.PointCloud()
+            pcd_all_vis.points = o3d.utility.Vector3dVector(self.get_pcds_all().cpu().numpy())
+            pcd_all_vis.paint_uniform_color([0, 1, 0])
+            # origine frame
+            mesh_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1, origin=[0, 0, 0])
+            o3d.visualization.draw_geometries([pcd_from_prompt_vis, pcd_vis, pcd_all_vis, mesh_frame])
             print("No grasp found")
         
         return poses, kappa, graspness
@@ -435,7 +452,10 @@ class GraspBuffer:
             print("Buffer is empty, no grasp to choose")
             return None
         
-        poses, kappa, graspness = self.get_pose_fused(convention, pcd_from_prompt) if pose_fused else self.get_pose_curr(convention, pcd_from_prompt)
+        if pose_fused:
+            poses, kappa, graspness = self.get_pose_fused(convention, pcd_from_prompt)  
+        else: 
+            poses, kappa, graspness = self.get_pose_curr(convention, pcd_from_prompt)
         
         if len(poses) == 0:
             print("No grasp found")

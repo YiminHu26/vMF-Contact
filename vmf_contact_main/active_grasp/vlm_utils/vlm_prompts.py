@@ -53,9 +53,9 @@ base64_image_exp = []
 json_data_exp = []
 target_occlusion_pairs_exp = {
     0:["yellow tennisball",["red cup", "orange cordeless drill"]], 
-    1:["purple plum",["red cheezit box", "white bottle"]],
+    # 1:["purple plum",["red cheezit box", "white bottle"]],
     # 2:["golfball",["yellow cup"]], 
-    3:["white tennis ball",["white dominos box", "red cheezit box"]],
+    # 3:["white tennis ball",["white dominos box", "red cheezit box"]],
     # 4: ["green cube",["red cup", "white bottle"]],
 }
 for ind in target_occlusion_pairs_exp.keys():
@@ -116,13 +116,13 @@ def return_prompt_scene(img, target_object):
                 - **No extra text, explanations, or chain-of-thought reasoning** should appear in the final output. \n
                
               """ +  
-              # + f"""
-              # 4. **Important**
-              #   - **Please put a special focus on the object: {target_object}**. If it is detected, ensure to put it as the first dictionary.  
-              #   - **Background object such as table should not be included** 
-              #   \n
-              # """ 
-              # + 
+              f"""
+              4. **Important**
+                - **Please put a special focus on the object: {target_object}**. If it is detected, ensure to put it as the first dictionary.  
+                - **Background object such as table should not be included** 
+                \n
+              """ 
+              + 
               """
               ### **Final Output Example**
               ```json

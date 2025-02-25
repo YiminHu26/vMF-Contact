@@ -31,15 +31,13 @@ angular_vel = 3
 control_rate = 10
 policy_rate = 4
 
-TARGET_OBJECT = "yellow peach"
+TARGET_OBJECT = "tennis ball"
 
 # baselines:
 INITIAL_VIEW_ONLY = False
-TOP_DOWN = True
+TOP_DOWN = False 
 
-
-if TOP_DOWN or INITIAL_VIEW_ONLY:
-    WITHOUT_NBV = True
+WITHOUT_NBV = TOP_DOWN or INITIAL_VIEW_ONLY
 
 class State:
     def __init__(self, tsdf):
@@ -53,8 +51,8 @@ class AIRNodeVLM(AIRNode):
         self.nbv_memory_pose = None
         if not TOP_DOWN:
             self.camera_ready_pose = list_to_pose_stamped([-0.370, -0.612, 1.224, 0.942, 0.007, -0.005, 0.336], "world")
-        self.gaze_point_robot=np.array([-0.73, 0.1, 0.])
-        pcd_center = list_to_pose_stamped(self.gaze_point_robot.tolist() + [0., 0., 0., 1.], "base_link")
+        self.pcd_shift=np.array([-0.73, 0.1, 0.])
+        pcd_center = list_to_pose_stamped(self.pcd_shift.tolist() + [0., 0., 0., 1.], "base_link")
         self.publish_new_frame("center", pcd_center)
             
         lower = [pcd_center.pose.position.x - O_SIZE / 2, 
@@ -76,7 +74,7 @@ class AIRNodeVLM(AIRNode):
         args = parser.parse_args()
         self.policy:VLMPolicy = make(args.policy, 
                                      target_object=TARGET_OBJECT, 
-                                     pcd_center=self.gaze_point_robot,
+                                     pcd_center=self.pcd_shift,
                                      min_z_dist=min_z_dist)           
         self.user_input_thread = threading.Thread(target=self.handle_user_input)
         self.user_input_thread.start()
@@ -96,7 +94,7 @@ class AIRNodeVLM(AIRNode):
 
         # intialize the camera and start capturing sensor data
         self.get_camera_info()
-        self.to_camera_ready_pose()
+        #self.to_camera_ready_pose()
         self.fetch = threading.Thread(target=self.process_point_cloud_and_rgbd_node)
         self.fetch.start()
 
@@ -107,10 +105,7 @@ class AIRNodeVLM(AIRNode):
         self.rate = self.create_rate(policy_rate)
 
         # start recording
-        record_orbbec_video(self, "color")
-        record_orbbec_video(self, "depth")
-        self.realsense_thread = threading.Thread(target=record_realsense_video)
-        self.realsense_thread.start()
+        self.record_videos()
 
         while not CLEAR:
             self.set_eelink(SENSOR_FRAME)
@@ -185,17 +180,14 @@ class AIRNodeVLM(AIRNode):
         else:
             t_robot_2_camera = self.tf_buffer.lookup_transform("base_link", SENSOR_FRAME, rclpy.time.Time()).transform
             x = SpatialTransform.from_matrix(transform_to_matrix(t_robot_2_camera))
-            if WITHOUT_NBV:
-                cmd = np.zeros(6)
-            else:
-                cmd = self.compute_velocity_cmd(x, linear_vel=linear_vel, angular_vel=angular_vel)
+            cmd = self.compute_velocity_cmd(x, linear_vel=linear_vel, angular_vel=angular_vel)
             # publish the view velocity
             pose_robot_2_camera: Pose = transform_to_pose(t_robot_2_camera)
             pose_robot_2_camera_next = apply_transform_to_pose(pose_robot_2_camera, cmd) 
             self.publish_new_frame(f"camera_view_velocity", pose_stamped_from_pose(pose_robot_2_camera_next, "base_link")) 
             # print(f"cmd move scale: {np.linalg.norm(cmd[:3])}")
             # print(f"cmd angle scale: {np.linalg.norm(cmd[3:])}")
-            if np.linalg.norm(cmd[:3]) < 1e-3:
+            if np.linalg.norm(cmd[:3]) < 1e-3 or WITHOUT_NBV:
                 self.get_logger().info("NBV reached, set velocity to zero")
                 self.policy.nbv_reached = True
                 self.policy.nbv_fields = []
@@ -207,7 +199,7 @@ class AIRNodeVLM(AIRNode):
 
         e_t = self.policy.query_field_fusion_from_list(x.translation)
         
-        r = np.linalg.norm(x.translation - self.gaze_point_robot)
+        r = np.linalg.norm(x.translation - self.pcd_shift)
         e_n = (x.translation - view_focus) * (self.view_sphere.r - r) / r # pull the camera towards the sphere
 
         # self.logger.info(f"e_t: {e_t}, e_n: {e_n}")

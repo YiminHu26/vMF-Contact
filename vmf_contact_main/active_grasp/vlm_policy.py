@@ -26,7 +26,7 @@ class VLMPolicy(MultiViewPolicy):
     def __init__(self, target_object, pcd_center, min_z_dist):
         super().__init__()
         self.max_views = 80
-        self.score_th = 0.4
+        self.score_th = 0.6
         self.grasp_agent = main_module(parse_args_from_yaml(current_file_folder + "/../config.yaml"), learning=False)
         self.grasp_buffer = self.grasp_agent.grasp_buffer
         self.target_object_final = target_object
@@ -78,7 +78,6 @@ class VLMPolicy(MultiViewPolicy):
             # create the NBV fields from all tall objects in the scene
             self.create_nbv_field()
             self.wait_nbv_run()
-            # self.visualize_nbv_fields(pose.translation)
             self.vlm_agent.set_vlm_cmd("scene")
         else:
             print(f"[Policy]: Target object {self.target_object_curr_label} is not found, start guessing ...")
@@ -156,18 +155,18 @@ class VLMPolicy(MultiViewPolicy):
         self.nbv_fields = nbv_fields
         self.nbv_occ = nbv_occ
 
-
     def create_nbv_field(self):
         nbv_fields = []
         nbv_occ = []
         for obj in self.scene_objects.values():
             if obj.label != self.target_object_curr_label and self.target_object_curr.center[-1] - obj.center[-1] < 0.03:
                 print(f"[Policy]: Object {obj.label} considered for NBV")
-                nbv_occ.append(obj.center)
-                nbv_fields.append(self.nbv_func(obj))  
+                nbv_occ+=obj.bbox_3d.tolist()
+                # nbv_fields.append(self.nbv_func(obj))  
+                nbv_fields+=self.nbv_funcs(obj)
         self.nbv_fields = nbv_fields
         self.nbv_occ = nbv_occ
-
+        # self.visualize_nbv_fields(pose.translation)
 
     def nbv_func(self, obj):
         return partial(
@@ -176,7 +175,16 @@ class VLMPolicy(MultiViewPolicy):
             R_s = self.min_z_dist,
             P1 = obj.center,
             P2 = self.target_object_curr.center
-        )      
+        )  
+
+    def nbv_funcs(self, obj):
+        return [partial(
+            query_tangent_vector,
+            S = self.pcd_center,
+            R_s = self.min_z_dist,
+            P1 = point,
+            P2 = self.target_object_curr.center
+        )  for point in obj.bbox_3d]   
     
     def wait_nbv_run(self):
         time_curr = time.time()
@@ -185,8 +193,9 @@ class VLMPolicy(MultiViewPolicy):
             print(f"[Policy]: Waiting for the NBV to be reached ...")
             if time.time() - time_curr > 25:
                 break
-            time.sleep(3)
+            time.sleep(2)
         print(f"[Policy]: NBV is reached.")
+        self.views += 1
     
     def visualize_nbv_fields(self, current_cam_pos):
         if True and len(self.nbv_fields) > 0:
