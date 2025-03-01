@@ -199,7 +199,7 @@ class VLMAgent():
             # save masked image
             # cv2.imwrite(f"{current_file_folder}/{langsam_label}.jpg", img[..., ::-1] * mask)
         
-        # o3d.visualization.draw_geometries(vis_list)
+        o3d.visualization.draw_geometries(vis_list)
         self.scene_objects = scene_objects
     
     def set_vlm_cmd(self, vlm_cmd):

@@ -28,9 +28,9 @@ import tf2_geometry_msgs
 from .utils_node import *
 from lang_sam import LangSAM
 from PIL import Image
-from vmf_contact_main.camera_utils import *
-from vmf_contact_main.active_grasp.spatial import *
-from vmf_contact_main.active_grasp.vlm_utils.img_bbox_utils import *
+from ros2_nodes.utils_camera import *
+from active_grasp.spatial import *
+from active_grasp.vlm_utils.img_bbox_utils import *
 import signal
 current_file_folder = os.path.dirname(os.path.abspath(__file__))
 

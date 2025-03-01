@@ -12,9 +12,9 @@ from vgn.perception import create_tsdf
 
 from .inference_node_base import *
 
-from vmf_contact_main.camera_utils import *
-from vmf_contact_main.active_grasp.policy import make, registry
-from vmf_contact_main.active_grasp.spatial import *
+from ros2_nodes.utils_camera import *
+from active_grasp.policy import make, registry
+from active_grasp.spatial import *
 
 import argparse
 

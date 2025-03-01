@@ -431,7 +431,7 @@ class GraspBuffer:
     
     def get_pose_fused_best(self, 
                             convention="xzy", 
-                            sort_by="graspness", 
+                            sort_by="kappa", 
                             sample_num=1,
                             pcd_from_prompt=None
                             ):

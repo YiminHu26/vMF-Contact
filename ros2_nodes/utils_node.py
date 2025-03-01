@@ -1,7 +1,7 @@
 import numpy as np
 from geometry_msgs.msg import Pose, PoseStamped, Transform, TransformStamped
 from tf_transformations import quaternion_from_matrix, quaternion_matrix, translation_from_matrix
-from vmf_contact_main.active_grasp.spatial import SpatialTransform
+from active_grasp.spatial import SpatialTransform
 from scipy.spatial.transform import Rotation as R
 import numpy as np
 import torch

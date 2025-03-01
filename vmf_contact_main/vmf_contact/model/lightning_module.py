@@ -543,7 +543,8 @@ class vmfContactLightningModule(pl.LightningModule):
         pcd_from_prompt=None,
         convention="xzy",
         vis=False,
-        use_normal_vis=False
+        use_normal_vis=False,
+        pose_fused=True
         ):
         if len(pcd) == 0:
             # print("No valid point cloud, skipping inference")
@@ -604,7 +605,7 @@ class vmfContactLightningModule(pl.LightningModule):
             # print("No valid grasp")
             return None
         if vis:
-            self.grasp_buffer.vis_grasps(use_normal_vis=use_normal_vis)
+            self.grasp_buffer.vis_grasps(use_normal_vis=use_normal_vis, pose_fused=pose_fused)
         pose_chosen = self.grasp_buffer.get_pose_curr_best(convention=convention, sample_num=sample_num)
         
         # print("Chosen pose", pose_chosen)

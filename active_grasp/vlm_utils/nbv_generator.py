@@ -12,7 +12,7 @@ def generate_random_points_in_sphere(S, R_s, num_points=10):
     """
     theta = np.random.uniform(0, np.pi/2, num_points)  # Polar angle
     phi = np.random.uniform(0, 2 * np.pi, num_points)  # Azimuthal angle
-    R_s = np.random.uniform(0, 1, num_points)*R_s *0.6 # Random radius
+    R_s = np.random.uniform(0, 1, num_points)*R_s * 0.6 # Random radius
 
     X = S[0] + R_s * np.sin(theta) * np.cos(phi)
     Y = S[1] + R_s * np.sin(theta) * np.sin(phi)
@@ -202,6 +202,7 @@ def animate_query_tangent_vector(S,
     tangent_vectors = np.zeros((num_queries**2, 3))
     for i, q in enumerate(query_points):
         tangent_vectors[i] = query_tangent_vector_sum_from_field_list(S, P_q=q, field_list=field_list)
+    tangent_vectors /= np.linalg.norm(tangent_vectors, axis=1)[:, None] + 1e-6
     
     # Plot sphere surface
     u = np.linspace(0, np.pi / 2, 30)

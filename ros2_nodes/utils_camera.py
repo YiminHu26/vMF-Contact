@@ -80,6 +80,7 @@ def transform_point_cloud(cloud, transform, format='4x4'):
         cloud_transformed = cloud_transformed.reshape(original_shape)
 
     return cloud_transformed
+
 def compute_point_dists(A, B):
     """ Compute pair-wise point distances in two matrices.
 

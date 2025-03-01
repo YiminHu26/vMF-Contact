@@ -9,11 +9,11 @@ from vgn.grasp import *
 
 from .inference_node_base import *
 
-from vmf_contact_main.camera_utils import *
-from vmf_contact_main.active_grasp.policy import make, registry
-from vmf_contact_main.active_grasp.bbox import AABBox
-from vmf_contact_main.active_grasp.spatial import *
-from vmf_contact_main.active_grasp.timer import Timer
+from ros2_nodes.utils_camera import *
+from active_grasp.policy import make, registry
+from active_grasp.bbox import AABBox
+from active_grasp.spatial import *
+from active_grasp.timer import Timer
 
 import argparse
 

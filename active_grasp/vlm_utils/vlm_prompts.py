@@ -53,7 +53,7 @@ base64_image_exp = []
 json_data_exp = []
 target_occlusion_pairs_exp = {
     0:["yellow tennisball",["red cup", "orange cordeless drill"]], 
-    # 1:["purple plum",["red cheezit box", "white bottle"]],
+    1:["purple plum",["red cheezit box", "white bottle"]],
     # 2:["golfball",["yellow cup"]], 
     # 3:["white tennis ball",["white dominos box", "red cheezit box"]],
     # 4: ["green cube",["red cup", "white bottle"]],

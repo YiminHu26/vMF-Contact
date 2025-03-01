@@ -9,9 +9,9 @@ from cv_bridge import CvBridge
 import os, torch
 import numpy as np
 import copy
-from tf_transformations import quaternion_matrix, quaternion_from_matrix, translation_from_matrix
+from tf_transformations import quaternion_from_matrix, translation_from_matrix
 from PIL import Image
-from vmf_contact_main.camera_utils import *
+from ros2_nodes.utils_camera import *
 import time
 
 O_SIZE = .3
@@ -161,7 +161,8 @@ class AIRNodevMF(AIRNode):
         pose_chosen = self.agent.inference(pcd, 
                                         pcd_from_prompt=pcd_from_prompt,
                                         shift=self.pcd_shift,
-                                        graspness_th=0.7)
+                                        graspness_th=0.7, 
+                                        pose_fused=True)
         # Add the new geometry for the current frame
 
         if pose_chosen is None:

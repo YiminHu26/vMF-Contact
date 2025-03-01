@@ -6,12 +6,12 @@ from .utils_node import *
 
 from .inference_node_base import *
 
-from vmf_contact_main.camera_utils import *
-from vmf_contact_main.active_grasp.policy import make, registry
-from vmf_contact_main.active_grasp.vlm_policy import VLMPolicy
-from vmf_contact_main.active_grasp.bbox import AABBox
-from vmf_contact_main.active_grasp.spatial import *
-from vmf_contact_main.active_grasp.timer import Timer
+from ros2_nodes.utils_camera import *
+from active_grasp.policy import make, registry
+from active_grasp.vlm_policy import VLMPolicy
+from active_grasp.bbox import AABBox
+from active_grasp.spatial import *
+from active_grasp.timer import Timer
 
 import argparse
 from functools import partial
@@ -25,13 +25,13 @@ MOVING_BACK_TO_NBV = "moving_back_to_nbv"
 O_RESOLUTION = 40
 O_SIZE = .3
 O_VOXEL_SIZE = O_SIZE / O_RESOLUTION
-min_z_dist = .40
+min_z_dist = .3
 linear_vel = .1
-angular_vel = 3
+angular_vel = 2
 control_rate = 10
 policy_rate = 4
 
-TARGET_OBJECT = "tennis ball"
+TARGET_OBJECT = "red cup"
 
 # baselines:
 INITIAL_VIEW_ONLY = False
@@ -39,6 +39,8 @@ TOP_DOWN = False
 
 WITHOUT_NBV = TOP_DOWN or INITIAL_VIEW_ONLY
 
+# WITHOUT_NBV = True
+ 
 class State:
     def __init__(self, tsdf):
         self.tsdf = tsdf
@@ -94,7 +96,7 @@ class AIRNodeVLM(AIRNode):
 
         # intialize the camera and start capturing sensor data
         self.get_camera_info()
-        #self.to_camera_ready_pose()
+        # self.to_camera_ready_pose()
         self.fetch = threading.Thread(target=self.process_point_cloud_and_rgbd_node)
         self.fetch.start()
 
@@ -140,6 +142,7 @@ class AIRNodeVLM(AIRNode):
                 CLEAR = all([word in self.policy.target_object_curr_label for word in TARGET_OBJECT.split(" ")])
                 self.policy.scene_objects.pop(self.policy.target_object_curr.label, None)
             time.sleep(2)
+            break
 
     def process_grasp(self, grasp):
         grasp = grasp.cpu().numpy()
@@ -234,8 +237,8 @@ class AIRNodeVLM(AIRNode):
         self.publish_new_frame("pregrasp", pregrasp_pose)
         
         # ask if the user wants to continue
-        # user_input = input("Press 'c' to continue or any other key to quit: ")
-        if True:
+        user_input = input("Press 'c' to continue or any other key to quit: ")
+        if user_input == "c":
 
             self.stop_event.clear()
             self.movement_failed_flag.clear()
