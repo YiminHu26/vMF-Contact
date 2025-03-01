@@ -53,21 +53,19 @@ class AIRNodeVLM(AIRNode):
         self.nbv_memory_pose = None
         if not TOP_DOWN:
             self.camera_ready_pose = list_to_pose_stamped([-0.370, -0.612, 1.224, 0.942, 0.007, -0.005, 0.336], "world")
+        
         self.pcd_shift=np.array([-0.73, 0.1, 0.])
         pcd_center = list_to_pose_stamped(self.pcd_shift.tolist() + [0., 0., 0., 1.], "base_link")
         self.publish_new_frame("center", pcd_center)
-            
         lower = [pcd_center.pose.position.x - O_SIZE / 2, 
                     pcd_center.pose.position.y - O_SIZE / 2, 
                     pcd_center.pose.position.z]
         upper = [pcd_center.pose.position.x + O_SIZE / 2,
                 pcd_center.pose.position.y + O_SIZE / 2,
                 pcd_center.pose.position.z + 0.09]
-        
         middle = (np.array(lower) + np.array(upper)) / 2
         self.box_center = list_to_pose_stamped(middle.tolist() + [0., 0., 0., 1.], "base_link")
         self.publish_new_frame("box_center", self.box_center)
-
         self.bbox: AABBox = AABBox(lower, upper)
         self.view_sphere = ViewHalfSphere(self.bbox, min_z_dist)
         
@@ -81,7 +79,6 @@ class AIRNodeVLM(AIRNode):
         self.user_input_thread = threading.Thread(target=self.handle_user_input)
         self.user_input_thread.start()
 
-    
     def memorize_nbv_pose(self):
         # store current position in memory
         self.set_eelink("camera_color_optical_frame")
@@ -91,7 +88,6 @@ class AIRNodeVLM(AIRNode):
         self.nbv_memory_pose = self.get_current_ee_pose()
         print(f"Memory: {self.nbv_memory_pose}")
     
-
     def handle_user_input(self):
 
         # intialize the camera and start capturing sensor data
@@ -104,7 +100,7 @@ class AIRNodeVLM(AIRNode):
         success = CLEAR = False
         self.create_timer(1.0 / 30, self.send_vel_cmd)
         self.create_timer(1.0 / 8, self.grasp_inference)   
-        self.rate = self.create_rate(policy_rate)
+        # self.rate = self.create_rate(policy_rate)
 
         # start recording
         self.record_videos()
@@ -118,7 +114,12 @@ class AIRNodeVLM(AIRNode):
         
                 while not self.policy.done:
                     if self.input_ready:
-                        self.policy.update(self.img, self.depth, self.pcd, self.cam_pose_robot, self.azimuth, self.elevation)
+                        self.policy.update(self.img, 
+                                           self.depth, 
+                                           self.pcd, 
+                                           self.cam_pose_robot, 
+                                           self.azimuth, 
+                                           self.elevation)
                     # self.rate.sleep()
 
             grasp = self.policy.best_grasp
@@ -215,10 +216,10 @@ class AIRNodeVLM(AIRNode):
         angular = angular_vel * angular.as_rotvec()
         return np.r_[linear, angular]
     
-    def grasp_inference(self, use_normal_vis=False):
+    def grasp_inference(self, interactive_vis=False):
         #pcd, identifier = self.process_point_cloud_and_rgbd(pcd_only=True)
         if self.input_ready:
-            self.policy.update_grasp(self.pcd, use_normal_vis)
+            self.policy.update_grasp(self.pcd, interactive_vis)
     
 
     def execute_grasp(self, grasp_pose:Pose, frame = "base_link"):

@@ -162,7 +162,7 @@ class AIRNodevMF(AIRNode):
                                         pcd_from_prompt=pcd_from_prompt,
                                         shift=self.pcd_shift,
                                         graspness_th=0.7, 
-                                        pose_fused=True)
+                                        fused_pose=True)
         # Add the new geometry for the current frame
 
         if pose_chosen is None:

@@ -240,7 +240,7 @@ class VLMPolicy(MultiViewPolicy):
             self.done = True
     
 
-    def update_grasp(self, pcd_raw, use_normal_vis=False):
+    def update_grasp(self, pcd_raw, interactive_vis=False):
         if not self.done and pcd_raw.shape[0] > 0:
             pcd = self.denoise_pcd(pcd_raw)
 
@@ -253,7 +253,7 @@ class VLMPolicy(MultiViewPolicy):
                                         shift=self.pcd_center,
                                         graspness_th=self.score_th,
                                         vis=True,
-                                        use_normal_vis=use_normal_vis)
+                                        interactive_vis=interactive_vis)
                 self.i += 1
                 # print(f"[vMF-Contact] Time taken for grasp inference: {time.time() - time_curr}")
 
