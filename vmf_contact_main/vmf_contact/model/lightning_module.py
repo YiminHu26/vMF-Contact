@@ -537,9 +537,7 @@ class vmfContactLightningModule(pl.LightningModule):
         pcd_shift=0.0,
         resize=1.0, 
         sample_num=1,
-        grasp_height_th=1e-2,
-        grasp_width_th=0.15,
-        graspness_th=0.,
+        graspness_th=0.3,
         pcd_from_prompt=None,
         convention="xzy",
         vis=False,
@@ -593,14 +591,13 @@ class vmfContactLightningModule(pl.LightningModule):
 
         # update the grasp buffer
         valid_grasp = self.grasp_buffer.update(pcd, 
-                                 predictions,
-                                 pcd_shift,
-                                 resize,
-                                 # threshold for filtering out invalid grasps 
-                                 grasp_height_th, 
-                                 grasp_width_th, 
-                                 graspness_th, 
-                                 pcd_from_prompt)
+                                    predictions,
+                                    pcd_shift,
+                                    resize,
+                                    # threshold for filtering out invalid grasps 
+                                    graspness_th = graspness_th, 
+                                    pcd_from_prompt = pcd_from_prompt
+                                    )
         if not valid_grasp:
             # print("No valid grasp")
             return None

@@ -635,7 +635,7 @@ class AIRNode(Node):
         pregrasp_pose = PoseStamped()
         pregrasp_pose.header = grasp_pose.header
         pregrasp_pose.header.frame_id = "world"
-        pregrasp_pose.pose = self.transform_pose_z(grasp_pose.pose, z_offset=-0.13)
+        pregrasp_pose.pose = self.transform_pose_z(grasp_pose.pose, z_offset=-0.1)
         # print("Pregrasp pose: ", pregrasp_pose)
         return pregrasp_pose
     

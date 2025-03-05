@@ -277,7 +277,8 @@ def get_args_parser(
 
 import yaml
 print(f"{data_path}/dataset/vmf_data/data*")
-def parse_args_from_yaml(config_path: str):
+
+def parse_args_from_yaml(config_path: str = current_dir + "/config.yaml"):
     # Load default configurations from YAML
     with open(config_path, 'r') as f:
         yaml_config = yaml.safe_load(f)

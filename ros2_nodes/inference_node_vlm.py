@@ -26,12 +26,12 @@ O_RESOLUTION = 40
 O_SIZE = .3
 O_VOXEL_SIZE = O_SIZE / O_RESOLUTION
 min_z_dist = .3
-linear_vel = .1
+linear_vel = .05
 angular_vel = 2
 control_rate = 10
 policy_rate = 4
 
-TARGET_OBJECT = "red cup"
+TARGET_OBJECT = "tennis ball"
 
 # baselines:
 INITIAL_VIEW_ONLY = False
@@ -49,7 +49,7 @@ class AIRNodeVLM(AIRNode):
 
     def __init__(self):
         super().__init__()
-        self.set_vel_acc(.4, .2)
+        self.set_vel_acc(.2, .2)
         self.nbv_memory_pose = None
         if not TOP_DOWN:
             self.camera_ready_pose = list_to_pose_stamped([-0.370, -0.612, 1.224, 0.942, 0.007, -0.005, 0.336], "world")
@@ -98,7 +98,7 @@ class AIRNodeVLM(AIRNode):
 
         # Initialize the search policy
         success = CLEAR = False
-        self.create_timer(1.0 / 30, self.send_vel_cmd)
+        self.create_timer(1.0 / 30, self.send_vel_cmd2)
         self.create_timer(1.0 / 8, self.grasp_inference)   
         # self.rate = self.create_rate(policy_rate)
 
@@ -158,7 +158,7 @@ class AIRNodeVLM(AIRNode):
 
         # self.logger.info(f"e_t: {e_t}, e_n: {e_n}")
 
-        linear = np.array([-0.1, 0., 0.])
+        linear = np.array([0., 0.1, 0.])
 
         scale = np.linalg.norm(linear) + 1e-6
         linear *= np.clip(scale, 0.0, linear_vel) / scale # scale the linear velocity
@@ -181,6 +181,11 @@ class AIRNodeVLM(AIRNode):
     def send_vel_cmd(self):
         if len(self.nbv_fields)==0 or self.policy.done:
             cmd = np.zeros(6)
+        elif WITHOUT_NBV:
+            cmd = np.zeros(6)
+            self.get_logger().info("NBV reached, set velocity to zero")
+            self.policy.nbv_reached = True
+            self.policy.nbv_fields = []
         else:
             t_robot_2_camera = self.tf_buffer.lookup_transform("base_link", SENSOR_FRAME, rclpy.time.Time()).transform
             x = SpatialTransform.from_matrix(transform_to_matrix(t_robot_2_camera))
@@ -191,7 +196,7 @@ class AIRNodeVLM(AIRNode):
             self.publish_new_frame(f"camera_view_velocity", pose_stamped_from_pose(pose_robot_2_camera_next, "base_link")) 
             # print(f"cmd move scale: {np.linalg.norm(cmd[:3])}")
             # print(f"cmd angle scale: {np.linalg.norm(cmd[3:])}")
-            if np.linalg.norm(cmd[:3]) < 1e-3 or WITHOUT_NBV:
+            if np.linalg.norm(cmd[:3]) < 1e-3:
                 self.get_logger().info("NBV reached, set velocity to zero")
                 self.policy.nbv_reached = True
                 self.policy.nbv_fields = []

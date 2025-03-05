@@ -21,8 +21,8 @@ Device = Union[str, torch.device]
 INTEG = True
 normal_o3d_vis = False
 
-pcd_from_prompt_matching_th = 0.005
-dist_th_pcd=0.02
+pcd_from_prompt_matching_th = 0.002
+dist_th_pcd=0.01
 dist_th_baseline = 0.86
 
 class GraspBuffer:
@@ -60,7 +60,7 @@ class GraspBuffer:
         ctr = self.vis.get_view_control()
 
         # Set camera parameters
-        ctr.set_zoom(.7)  # Zoom factor
+        ctr.set_zoom(1.2)  # Zoom factor
         ctr.set_lookat(self.view_center)  # Look at center
         ctr.set_front([5, 0, 0])  # View direction
         ctr.set_up([0, 0, 1])  # Up vector
@@ -137,13 +137,13 @@ class GraspBuffer:
         if pcd_from_prompt is not None:
             filter = filter & self.filter_grasps_by_pcd(cp, pcd_from_prompt)
 
-        pcds = pcds * resize + pcd_shift
 
         if filter.sum() == 0:
             return False
 
         # print(f"Number of grasps: {filter.sum()}")
         else:
+            pcds = pcds * resize + pcd_shift
             cp = cp[filter] * resize + pcd_shift
             cp2 = cp2[filter] * resize + pcd_shift
             
@@ -179,7 +179,7 @@ class GraspBuffer:
         
         if self.baseline_fused is None:
             cp, grasp_width, baseline, bin_score, kappa, graspness = self.self_merge_grasps(
-                cp, grasp_width, baseline, bin_score, kappa, graspness, dist_th_pcd, dist_th_baseline
+                cp, grasp_width, baseline, bin_score, kappa, graspness
             )
             # self fusion
             self.baseline_fused = baseline
@@ -187,7 +187,7 @@ class GraspBuffer:
             self.cp_fused= cp
             self.grasp_width_fused= grasp_width
             self.kappa_fused = kappa
-            self.graspness_fused = graspness            
+            self.graspness_fused = graspness  
             return
 
         cp_dist = torch.cdist(self.cp_fused, cp)
@@ -217,9 +217,7 @@ class GraspBuffer:
                 baseline[new_grasp_idx], 
                 bin_score[new_grasp_idx], 
                 kappa[new_grasp_idx], 
-                graspness[new_grasp_idx], 
-                dist_th_pcd, 
-                dist_th_baseline)
+                graspness[new_grasp_idx])
             
             # Integrate new grasp points
             self.cp_fused = torch.cat((self.cp_fused, cp_new), dim=0)
@@ -231,7 +229,7 @@ class GraspBuffer:
 
             # print(f"Total grasp number after fusion: {len(self.cp_fused)}")
     
-    def self_merge_grasps(self, cp, grasp_width, baseline, bin_score, kappa, graspness, dist_th_pcd, dist_th_baseline):
+    def self_merge_grasps(self, cp, grasp_width, baseline, bin_score, kappa, graspness):
         """
         Merge similar grasps based on Euclidean distance and cosine similarity using DBSCAN clustering.
         """
@@ -254,7 +252,7 @@ class GraspBuffer:
         
         # Keep only unique grasps
         for i in range(num_grasps):
-            if redundant_mask[i].any() and unique_indices[i] == i:
+            if redundant_mask[i].any():
                 similar_grasps = torch.where(redundant_mask[i])[0]
                 # Merge similar grasps by taking the weighted average
                 cp[i] = (cp[similar_grasps] * graspness[similar_grasps]).sum(dim=0) / graspness[similar_grasps].sum()
@@ -279,7 +277,10 @@ class GraspBuffer:
         unique_mask = unique_indices == torch.arange(num_grasps)
         return cp[unique_mask], grasp_width[unique_mask], baseline[unique_mask], bin_score[unique_mask], kappa[unique_mask], graspness[unique_mask]  
 
-    def cross_merge_grasps(self, cp, grasp_width, baseline, bin_score, kappa, graspness):
+    def cross_merge_grasps(self, cp, grasp_width, baseline, bin_score, kappa, graspness, decay=0.99):
+
+        self.graspness_fused *= decay
+        self.kappa_fused *= decay
 
         # Match fused and new contact points
         pair_ind = match(self.cp_fused, cp)[0]
@@ -308,7 +309,7 @@ class GraspBuffer:
         self.baseline_fused[unique_indices] = (
             self.baseline_fused[unique_indices] * self.kappa_fused[unique_indices] + baseline_kappa_sum
         ) / (self.kappa_fused[unique_indices] + kappa_sum)
-        self.kappa_fused[unique_indices] += kappa_sum
+        self.kappa_fused[unique_indices] = kappa_sum + self.kappa_fused[unique_indices]
 
         # Bayesian update on the fused approach using Dirichlet distribution
         bin_score_sum, unique_indices, counts = group_and_sum(bin_score, cp_matched, cp_fused_matched)
@@ -383,7 +384,7 @@ class GraspBuffer:
                                   )
     
     def get_grasp_fused(self, pcd_from_prompt=None):
-        filter = self.graspness_fused > self.graspness_fused.max() * 0.0
+        filter = self.graspness_fused > self.graspness_fused.max() * 0.2
         #filter = filter & (self.kappa_fused > self.kappa_fused.max() * 0.5)
         filter = filter.squeeze(-1)
 
@@ -425,7 +426,7 @@ class GraspBuffer:
     
     def get_pose_fused_best(self, 
                             convention="xzy", 
-                            sort_by="kappa", 
+                            sort_by="graspness", 
                             sample_num=1,
                             pcd_from_prompt=None
                             ):

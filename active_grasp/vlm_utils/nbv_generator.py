@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 from functools import partial
 
-truncate=np.pi/3
+truncate=np.pi/4
 # np.random.seed(42)
 
 def generate_random_points_in_sphere(S, R_s, num_points=10):
@@ -218,13 +218,13 @@ def animate_query_tangent_vector(S,
     # Plot P1, P2, and the query points
     ax.scatter(*target_point, color='green', label="Target Object", s=200)
     for i, P in enumerate(occlusion_points):
-        ax.scatter(*P, color='blue', label=f"Neighbour {i+1}", s=200)
+        ax.scatter(*P, color='blue', label=f"Neighbour {i+1}", s=100)
     ax.scatter(*np.array(query_points).T, color='purple', label="Query Points", s=20)
     
     # Plot tangent vectors
     ax.quiver(query_points[:, 0], query_points[:, 1], query_points[:, 2],
               tangent_vectors[:, 0], tangent_vectors[:, 1], tangent_vectors[:, 2],
-              length=.15, color='red', label="Tangent Vectors")
+              length=.025, color='red', label="Tangent Vectors")
     
     # Initialize scatter plot for moving points
     point_plot, = ax.plot([], [], [], 'ro', label="Camera Viewpoint")

@@ -26,8 +26,8 @@ class VLMPolicy(MultiViewPolicy):
     def __init__(self, target_object, pcd_center, min_z_dist):
         super().__init__()
         self.max_views = 10
-        self.score_th = 0.6
-        self.grasp_agent = main_module(parse_args_from_yaml(current_file_folder + "/../config.yaml"), learning=False)
+        self.score_th = 0.5
+        self.grasp_agent = main_module(parse_args_from_yaml(), learning=False)
         self.grasp_buffer = self.grasp_agent.grasp_buffer
         self.target_object_final = target_object
         # initialize the agent process
@@ -250,7 +250,7 @@ class VLMPolicy(MultiViewPolicy):
                 time_curr = time.time()
                 self.curr_grasp = self.grasp_agent.inference(pcd, 
                                         pcd_from_prompt=None,
-                                        shift=self.pcd_center,
+                                        pcd_shift=self.pcd_center,
                                         graspness_th=self.score_th,
                                         vis=True,
                                         interactive_vis=interactive_vis)
@@ -258,13 +258,13 @@ class VLMPolicy(MultiViewPolicy):
                 # print(f"[vMF-Contact] Time taken for grasp inference: {time.time() - time_curr}")
 
 
-    def best_grasp_prediction_is_stable(self, sort_by="graspness"):
+    def best_grasp_prediction_is_stable(self, sort_by="kappa"):
         if self.target_object_curr is not None:
                 # get the current pcd of the target object
             pcd_from_prompt=self.target_object_curr.pcd
             
             # get the best grasp prediction on the target object
-            self.best_grasp = self.grasp_buffer.get_pose_fused_best(sort_by=sort_by, pcd_from_prompt=pcd_from_prompt)
+            self.best_grasp = self.grasp_buffer.get_pose_fused_best(sort_by=sort_by, pcd_from_prompt=pcd_from_prompt, sample_num=3)
 
             if self.best_grasp is None:
                 print(f"[vMF-Contact]: No grasp prediction on object: {self.target_object_curr_label}, even if it's found.")
