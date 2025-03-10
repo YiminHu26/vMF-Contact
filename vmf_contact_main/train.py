@@ -322,6 +322,9 @@ def main_module(
     point_backbone_cfgs.load(args.point_backbone_cfgs, recursive=True)
     args.point_backbone_cfgs = point_backbone_cfgs
 
+    if args.debug:
+        args.batch_size = 1
+
     # Initialize logger if needed
     if args.experiment is not None and not args.debug:
         remote_logger = WandbLogger(name=args.experiment, project="vmf_contact")

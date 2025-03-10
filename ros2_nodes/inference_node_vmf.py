@@ -161,7 +161,8 @@ class AIRNodevMF(AIRNode):
         pose_chosen = self.agent.inference(pcd, 
                                         pcd_from_prompt=pcd_from_prompt,
                                         shift=self.pcd_shift,
-                                        graspness_th=0.7, 
+                                        graspness_th=0.7,
+                                        grasp_height_th = 5e-3,
                                         fused_pose=True)
         # Add the new geometry for the current frame
 

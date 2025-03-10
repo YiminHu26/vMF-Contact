@@ -1132,7 +1132,7 @@ def contact_from_quaternion(quaternions, convention="xzy"):
 
 def draw_grasps(cp, cp2, approach, bin_vectors=None, score=None, kappa=None,
                 color=[0.7, 0.1, 0.1], graspline_width=5e-4, finger_length=0.025,
-                arm_length=0.02, sphere_radius=5e-6):
+                arm_length=0.02, sphere_radius=5e-3):
     
     vis_list = []
     color_max = np.array([0, 0, 1])
@@ -1171,7 +1171,6 @@ def draw_grasps(cp, cp2, approach, bin_vectors=None, score=None, kappa=None,
             # Draw spheres if kappa is provided
             if kappa is not None:
                 # clip kappa in 0, 500
-                kappa = np.clip(kappa, 0., 1000.)
                 sphere = o3d.geometry.TriangleMesh.create_sphere(radius=sphere_radius * kappa[i])
                 sphere.paint_uniform_color(color)
                 sphere.translate(q - app * finger_length)

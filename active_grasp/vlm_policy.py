@@ -252,6 +252,7 @@ class VLMPolicy(MultiViewPolicy):
                                         pcd_from_prompt=None,
                                         pcd_shift=self.pcd_center,
                                         graspness_th=self.score_th,
+                                        grasp_height_th=5e-3,
                                         vis=True,
                                         interactive_vis=interactive_vis)
                 self.i += 1
@@ -322,36 +323,3 @@ class VLMPolicy(MultiViewPolicy):
     @property
     def ordered_grasp_list(self) -> list[SceneObject]:
         return self.vlm_agent.ordered_grasp_list
-
-
-def denoise_point_cloud(points, method="statistical", nb_neighbors=20, std_ratio=2.0, radius=0.05, min_neighbors=16):
-    """
-    Denoises a point cloud given as a NumPy array.
-
-    Parameters:
-    - points (numpy.ndarray): Nx3 array representing point cloud coordinates.
-    - method (str): "statistical" for statistical outlier removal, "radius" for radius outlier removal.
-    - nb_neighbors (int): Number of neighbors for statistical outlier removal.
-    - std_ratio (float): Standard deviation ratio for statistical outlier removal.
-    - radius (float): Radius for radius outlier removal.
-    - min_neighbors (int): Minimum number of neighbors for radius outlier removal.
-
-    Returns:
-    - numpy.ndarray: Denoised point cloud.
-    """
-    # Convert NumPy array to Open3D point cloud
-    pcd = o3d.geometry.PointCloud()
-    pcd.points = o3d.utility.Vector3dVector(points)
-
-    # Apply selected denoising method
-    if method == "statistical":
-        pcd_clean, ind = pcd.remove_statistical_outlier(nb_neighbors=nb_neighbors, std_ratio=std_ratio)
-    elif method == "radius":
-        pcd_clean, ind = pcd.remove_radius_outlier(nb_points=min_neighbors, radius=radius)
-    else:
-        raise ValueError("Invalid method. Choose 'statistical' or 'radius'.")
-
-    # Convert back to NumPy array
-    return np.asarray(pcd_clean.points)
-
-

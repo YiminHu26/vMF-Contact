@@ -74,7 +74,7 @@ class GraspBuffer:
         self.vis.update_renderer()
         self.set_view()
 
-    def vis_grasps(self, pcd_shift, interactive_vis=False, fused_pose=False):
+    def vis_grasps(self, pcd_shift=None, interactive_vis=False, fused_pose=False, amplify_kappa=False):
 
         if len(self.buffer_dict["pcds"]) == 0:
             print("Buffer is empty, no grasp to visualize")
@@ -86,7 +86,10 @@ class GraspBuffer:
             baseline, approach, cp, grasp_width, kappa, graspness = self.get_grasp_fused()
         else:
             baseline, approach, cp, grasp_width, kappa, graspness = self.get_grasp_curr()
-        cp2 = cp + grasp_width * baseline        
+        cp2 = cp + grasp_width * baseline
+
+        if amplify_kappa:
+            kappa *= 80       
         
         vis_list = vis_grasps(
                     samples=pcd,
@@ -96,23 +99,82 @@ class GraspBuffer:
                     approach=approach,
                     score = graspness,
                 )
-        if not hasattr(self, "vis"):
+        if not hasattr(self, "vis") and pcd_shift is not None:
             self.create_vis()
             self.view_center = pcd_shift
-        if self.vis is None or interactive_vis:
+        if interactive_vis or self.vis is None:
             o3d.visualization.draw_geometries(vis_list)
         else:
             self.update_vis(vis_list)
+
+    def push_buffer(self, 
+                    pcd,
+                    out, 
+                    pcd_shift=0., 
+                    resize=1.0, 
+                    graspness_th = 0.0,
+                    grasp_height_th = -0.2, 
+                    pcd_from_prompt=None,
+                    prob_baseline="likelihood",
+                    uncertainty_estimator=None,
+                    integrate=False):
+        predictions = {}
+        predictions["contact_point"] = out["contact_point"].squeeze(0)
+        baseline_params = out["baseline"]
+
+        if len(pcd.shape) == 3:
+            pcd = pcd.squeeze(0)
+        
+        if prob_baseline == "post" and uncertainty_estimator is not None:
+            feature = out["cp_features"].squeeze(0)
+            baseline_post = uncertainty_estimator.posterior_update(feature, baseline_params)
+            baseline_vec = baseline_post.mu_post
+            kappa = baseline_post.kappa_post.squeeze()
+        
+        else:
+            baseline_vec = baseline_params[..., :3]
+            kappa = baseline_params[..., -1].exp().squeeze()
+        
+        kappa = torch.clip(kappa, 0., 1000.) / 1000.
+
+        baseline_vec = torch.nn.functional.normalize(baseline_vec, dim=-1)
+            
+        predictions["baseline"] = baseline_vec.squeeze(0)
+        predictions["kappa"] = kappa
+
+        bin_score = out["bin_score"].squeeze(0)
+        bin_vectors = rotate_circle_to_batch_of_vectors(
+                    bin_score.shape[-1], baseline_vec.squeeze(0)
+                )
+        approach = torch.gather(bin_vectors, 1, bin_score.argmax(dim=-1, keepdim=True)[...,None].expand(-1, -1, 3)).squeeze(1)
+        predictions["approach"] = approach
+        predictions["bin_score"] = bin_score
+        predictions["grasp_width"] = out["grasp_width"].float().squeeze(0)
+        predictions["graspness"] = out["graspness"].float().squeeze(0).sigmoid()
+
+        # update the grasp buffer
+        valid_grasp = self.update(pcd, 
+                                predictions,
+                                pcd_shift,
+                                resize,
+                                # threshold for filtering out invalid grasps
+                                grasp_height_th = grasp_height_th, 
+                                graspness_th = graspness_th, 
+                                pcd_from_prompt = pcd_from_prompt,
+                                integrate = integrate
+                                )
+        return valid_grasp
 
     def update(self, 
                pcds, 
                predictions,
                pcd_shift=0.0,
                resize=1.0, 
-               grasp_height_th=5e-3, 
-               grasp_width_th=0.1, 
+               grasp_height_th=-.2, 
+               grasp_width_th=0.2, 
                graspness_th=0.0, 
-               pcd_from_prompt=None):     
+               pcd_from_prompt=None,
+               integrate=False):     
         
         if not isinstance(pcd_shift, torch.Tensor):
             pcd_shift = torch.tensor(pcd_shift, device=pcds.device, dtype=torch.float32)
@@ -154,7 +216,7 @@ class GraspBuffer:
             bin_score = bin_score[filter]
             grasp_width = grasp_width[filter]
             
-            if INTEG:
+            if integrate:
                 self.integrate(cp, baseline, kappa, bin_score, grasp_width, graspness)
             
             self.buffer_dict["pcds"].append(pcds)  
