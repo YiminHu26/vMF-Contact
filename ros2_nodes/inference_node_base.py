@@ -28,11 +28,13 @@ import tf2_geometry_msgs
 from .utils_node import *
 from lang_sam import LangSAM
 from PIL import Image
+import message_filters
 from ros2_nodes.utils_camera import *
 from active_grasp.spatial import *
 from active_grasp.vlm_utils.img_bbox_utils import *
 import signal
 current_file_folder = os.path.dirname(os.path.abspath(__file__))
+from builtin_interfaces.msg import Duration
 
 #image_pil = Image.open("./assets/car.jpeg").convert("RGB")
 #text_prompt = "wheel."
@@ -131,8 +133,19 @@ class AIRNode(Node):
         self.tf_static_broadcaster = StaticTransformBroadcaster(self)
 
         # Create TF Listener to get the transform
-        self.tf_buffer = Buffer()
+        # Define cache time duration (e.g., 10 seconds)
+        cache_time = Duration()
+        cache_time.sec = 5
+        cache_time.nanosec = 0
+        
+        self.tf_buffer = Buffer(cache_time)
         self.tf_listener = TransformListener(self.tf_buffer, self)
+        
+        self.ts = message_filters.ApproximateTimeSynchronizer([self.pcd_subscriber, 
+                                                               self.img_subscriber, 
+                                                               self.dpt_subscriber,
+                                                               self.camera_info_subscriber], 10)
+        self.ts.registerCallback(self.process_point_cloud_and_rgbd_node)
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
