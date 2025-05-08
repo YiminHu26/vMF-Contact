@@ -287,12 +287,13 @@ class vmfContactModule():
         if ckpt is not None:
             ckpt_loaded = Path(f"{current_file_folder}/../../../logs/training/{self.args.point_backbone}/{ckpt}.ckpt")
             logger.info(f"Resuming from checkpoint: {ckpt_loaded}")
-            main_module = vmfContactLightningModule.load_from_checkpoint(ckpt_loaded, strict=False, debug=self.args.debug, args=self.args)
-        else:
-            logger.warning(
-                "No checkpoint found to resume from, train contact 3d from scratch."
-            )
-            main_module = vmfContactLightningModule(args=self.args)
-            ckpt_loaded = None
+            try:
+                main_module = vmfContactLightningModule.load_from_checkpoint(ckpt_loaded, strict=False, debug=self.args.debug, args=self.args)
+                return main_module, ckpt_loaded
+            except Exception as e:
+                logger.warning("No checkpoint found to resume from.")
+        logger.warning("Train from scratch.")
+        main_module = vmfContactLightningModule(args=self.args)
+        ckpt_loaded = None
         return main_module, ckpt_loaded
             

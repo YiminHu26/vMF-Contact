@@ -1,5 +1,5 @@
 # Training settings
-devices: 4  # Distributed training device number
+devices: 1  # Distributed training device number
 # debug: true  # Run in debug mode
 learning_rate: 1e-4  # Learning rate
 learning_rate_flow: 3e-4  # Learning rate for flow

@@ -1,4 +1,7 @@
-lightning==2.4.0
+--extra-index-url https://download.pytorch.org/whl/cu128
+torch --pre
+torchvision --pre
+lightning
 wandb
 opencv-python
 einops
