@@ -18,7 +18,9 @@ print("Cuda device number: ", torch.cuda.device_count())
 
 data_path = os.environ.get("LSDFPROJECTS")
 if data_path is None or not os.path.exists(data_path):
-    data_path = "../.."
+    home_path = os.path.expanduser("~")
+    data_path = os.path.join(home_path, "Research")
+assert os.path.exists(data_path), f"Data path {data_path} does not exist. Please set it."
 print(f"Current data path: {data_path}")
 
 from vmf_contact import vmfContactModule
