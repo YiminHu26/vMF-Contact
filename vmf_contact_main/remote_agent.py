@@ -461,7 +461,8 @@ def main():
                     pose_chosen = agent.inference(pcd_processed, 
                                                   pcd_from_prompt=pcd_from_prompt,
                                                   grasp_height_th=-0.02, 
-                                                  convention = "zyx")
+                                                  convention = "zyx",
+                                                  fused_pose=False)
                     if pose_chosen is None:
                         continue
                     pose_chosen[:3, 3] = pose_chosen[:3, 3] * pcd_resize
