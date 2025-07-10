@@ -342,29 +342,6 @@ def _copysign(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     return torch.where(signs_differ, -a, a)
 
 
-
-# def random_quaternions(
-#     n: int, *ns, dtype: Optional[torch.dtype] = None, device: Optional[Device] = None
-# ) -> torch.Tensor:
-#     """
-#     Generate random quaternions representing rotations,
-#     i.e. versors with nonnegative real part.
-#     Args:
-#         n: Number of quaternions in a batch to return.
-#         dtype: Type to return.
-#         device: Desired device of returned tensor. Default:
-#             uses the current device for the default tensor type.
-#     Returns:
-#         Quaternions as tensor of shape (N, 4).
-#     """
-#     if isinstance(device, str):
-#         device = torch.device(device)
-#     shape = [n] + [i for i in ns] + [4]
-#     o = torch.randn(shape, dtype=dtype, device=device)
-#     s = (o * o).sum(dim=-1)
-#     o = o / _copysign(torch.sqrt(s), o[:, 0])[:, None]
-#     return o
-
 @torch.jit.script
 def random_quaternions(n: int, device: Optional[Union[str, torch.device]] = None, dtype: Optional[torch.dtype] = None):
     if isinstance(device, str):
@@ -406,6 +383,7 @@ def hat(v: torch.Tensor) -> torch.Tensor:
     h[:, 2, 1] = x
 
     return h
+
 
 def hat_inv(h: torch.Tensor) -> torch.Tensor:
     """
@@ -864,6 +842,7 @@ def quaternion_to_axis_angle(quaternions: torch.Tensor) -> torch.Tensor:
     )
     return quaternions[..., 1:] / sin_half_angles_over_angles
 
+
 @torch.jit.script
 def multiply_se3(T1: torch.Tensor, T2: torch.Tensor, pre_normalize: bool = False, post_normalize: bool = True) -> torch.Tensor:
     if len(T1) == 1 or len(T2) == 1:
@@ -888,6 +867,7 @@ def multiply_se3(T1: torch.Tensor, T2: torch.Tensor, pre_normalize: bool = False
     
     return torch.cat([q,x], dim=-1)
 
+
 @torch.jit.script
 def multiply_so3(R1: torch.Tensor, R2: torch.Tensor) -> torch.Tensor:
     if len(R1) == 1 or len(R2) == 1:
@@ -900,14 +880,17 @@ def multiply_so3(R1: torch.Tensor, R2: torch.Tensor) -> torch.Tensor:
         assert R1.shape == R2.shape, f"Shape mismatch: R1: {R1.shape} || R2: {R2.shape}"
     return torch.bmm(R1, R2)
 
+
 @torch.jit.script
 def se3_invert(T: torch.Tensor) -> torch.Tensor:
     qinv = quaternion_invert(T[...,:4])
     return torch.cat([qinv, quaternion_apply(qinv, -T[..., 4:])], dim=-1)
 
+
 @torch.jit.script
 def quaternion_identity(n: int, device: Optional[torch.device] = None, dtype: Optional[torch.dtype] = None) -> torch.Tensor:
     return torch.tensor((1., 0., 0., 0.), device=device, dtype=dtype).repeat((n,1))
+
 
 @torch.jit.script
 def se3_from_r3(x: torch.Tensor) -> torch.Tensor:
