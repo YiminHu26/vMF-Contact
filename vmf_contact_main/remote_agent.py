@@ -364,7 +364,7 @@ def main_module(args: argparse.Namespace):
     if ckpt_loaded:
         import torch
         logger.info("Loaded checkpoint")
-        return main_module
+        # return main_module
         pcd = torch.load(f"{args.data_root_dir_test[0]}/env_0_epi_1_step_0_data.pt", map_location="cpu")["camera_3"]["pcd"]
         prediction = main_module.inference(pcd)
         print(prediction)

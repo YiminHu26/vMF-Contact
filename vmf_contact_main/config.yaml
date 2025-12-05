@@ -7,16 +7,16 @@ learning_rate_decay: 5e-4  # Learning rate decay
 run_finetuning: false  # Run fine-tuning
 max_epochs: 20000  # Maximum number of epochs
 flow_finetune: 0  # Number of warmup epochs
-batch_size: 4  # Batch size per GPU
+batch_size: 2  # Batch size per GPU
 epoch_length: 1250  # Length of an epoch in iterations
 resume: true  # Resume from existing checkpoints
 use_best_model: false  # Use the best model
 camera_num: 2  # Number of cameras
 gradient_accumulation_steps: 1  # Gradient accumulation steps
-# eval: true  # Evaluate the model
+eval: true  # Evaluate the model
 
 # Data module settings
-num_workers: 10  # Number of workers for data loading
+num_workers: 1  # Number of workers for data loading
 image_size: [480, 640]  # Image size (width, height)
 pcd_with_rgb: false  # Use RGB with PCD
 scale: 0.875  # Image scaling factor

@@ -364,20 +364,15 @@ def main_module(
             strategy="ddp_find_unused_parameters_true" if not args.eval else "auto"
         ),
     )
-    if learning:
-        estimator.fit(dm)
-    else:
-        main_module, ckpt_loaded = estimator.module_loader(args.ckpt)
-        if ckpt_loaded:
-            import torch
-            logger.info("Loaded checkpoint")
-            return main_module
-            pcd = torch.load(f"{args.data_root_dir_test[0]}/env_0_epi_1_step_0_data.pt", map_location="cpu")["camera_3"]["pcd"]
-            prediction = main_module.inference(pcd)
-            print(prediction)
-        else:
-            logger.info("No checkpoint loaded")
-            return None
+    main_module, ckpt_loaded = estimator.module_loader(args.ckpt)
+    main_module = main_module.to("cuda")
+    pcd = torch.load(f"vmf_data/env_4_epi_142_step_0_data.pt", map_location="cpu")["camera_3"]["pcd"]/1e4
+    import time
+    while True:
+        t = time.time()
+        prediction = main_module.inference(pcd.to("cuda"), graspness_th=0.7, grasp_height_th = 5e-3,)
+        print(time.time()-t)
+    print(prediction)
 
 
 if __name__ == "__main__":

@@ -1,13 +1,12 @@
---extra-index-url https://download.pytorch.org/whl/cu128
-torch --pre
-torchvision --pre
+normflows
 lightning
+easydict
 wandb
 opencv-python
 einops
-open3d
 multimethod
 termcolor
 shortuuid
-easydict
-normflows
+scipy
+scikit-learn
+

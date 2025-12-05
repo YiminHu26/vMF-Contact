@@ -276,22 +276,16 @@ class vmfContactModule():
 
         main_module, ckpt_loaded = self.module_loader(ckpt=ckpt)
 
-        if ckpt_loaded:
-            data.setup("validate")
-            trainer.validate(main_module, data.val_dataloader())
-        else:
-            raise ValueError("No checkpoint found to resume from, please check.")
+        data.setup("validate")
+        trainer.validate(main_module, data.val_dataloader())
     
 
     def module_loader(self, ckpt = None):
         if ckpt is not None:
             ckpt_loaded = Path(f"{current_file_folder}/../../../logs/training/{self.args.point_backbone}/{ckpt}.ckpt")
             logger.info(f"Resuming from checkpoint: {ckpt_loaded}")
-            try:
-                main_module = vmfContactLightningModule.load_from_checkpoint(ckpt_loaded, strict=False, debug=self.args.debug, args=self.args)
-                return main_module, ckpt_loaded
-            except Exception as e:
-                logger.warning("No checkpoint found to resume from.")
+            main_module = vmfContactLightningModule.load_from_checkpoint(ckpt_loaded, strict=False, debug=self.args.debug, args=self.args, weights_only=False)
+            return main_module, ckpt_loaded
         logger.warning("Train from scratch.")
         main_module = vmfContactLightningModule(args=self.args)
         ckpt_loaded = None
