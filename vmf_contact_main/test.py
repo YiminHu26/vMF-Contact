@@ -366,7 +366,7 @@ def main_module(
     )
     main_module, ckpt_loaded = estimator.module_loader(args.ckpt)
     main_module = main_module.to("cuda")
-    pcd = torch.load(f"vmf_data/env_4_epi_142_step_0_data.pt", map_location="cpu")["camera_3"]["pcd"]/1e4
+    pcd = torch.load(f"env_4_epi_142_step_0_data.pt", map_location="cpu")["camera_3"]["pcd"]/1e4
     import time
     while True:
         t = time.time()
