@@ -18,7 +18,7 @@ print("Cuda device number: ", torch.cuda.device_count())
 
 data_path = os.environ.get("LSDFPROJECTS")
 if data_path is None or not os.path.exists(data_path):
-    data_path = "/vmf"
+    data_path = ".."
 assert os.path.exists(data_path), f"Data path {data_path} does not exist. Please set it."
 print(f"Current data path: {data_path}")
 
@@ -366,11 +366,35 @@ def main_module(
     )
     main_module, ckpt_loaded = estimator.module_loader(args.ckpt)
     main_module = main_module.to("cuda")
-    pcd = torch.load(f"env_4_epi_142_step_0_data.pt", map_location="cpu")["camera_3"]["pcd"]/1e4
+    pcd = torch.load(f"env_4_epi_142_step_0_data.pt", map_location="cpu")["camera_3"]["pcd"]/1e3
+    
     import time
+    import open3d as o3d
+    pcd_bounds=torch.tensor([[0.2, -0.5, -0.5], [1.2, 0.5, 0.5]], dtype=torch.float32)
+    pcd_shift = (pcd_bounds[0] + pcd_bounds[1]) / 2
+    pcd_resize = pcd_bounds[1] - pcd_bounds[0]
+
+    # # visualize pointcloud
+    # pcd_o3d = o3d.geometry.PointCloud()
+    # pcd_o3d.points = o3d.utility.Vector3dVector(pcd.cpu().numpy())
+    # # coordinate frame
+    # axis = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.2, origin=[0, 0, 0])
+    # o3d.visualization.draw_geometries([pcd_o3d, axis])
+
+    pcd = (pcd.view(-1, 3) - pcd_shift) / pcd_resize
     while True:
         t = time.time()
-        prediction = main_module.inference(pcd.to("cuda"), graspness_th=0.7, grasp_height_th = 5e-3,)
+        # preprocess pointcloud
+        pcd = pcd[(pcd[:, 0] > -0.5) & (pcd[:, 0] < 0.5)]
+        pcd = pcd[(pcd[:, 1] > -0.5) & (pcd[:, 1] < 0.5)]
+        pcd = pcd[pcd[:, 2] > -0.02]
+        prediction = main_module.inference(pcd.to("cuda"), 
+                                           graspness_th=0.4, 
+                                           grasp_height_th = 5e-3, 
+                                           vis=False, 
+                                           integrate=False, 
+                                           fused_pose=False,
+                                           interactive_vis=True,)
         print(time.time()-t)
     print(prediction)
 

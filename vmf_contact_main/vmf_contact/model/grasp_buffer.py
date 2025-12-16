@@ -19,7 +19,7 @@ import copy
 
 Device = Union[str, torch.device]
 INTEG = True
-normal_o3d_vis = False
+normal_o3d_vis = True
 
 pcd_from_prompt_matching_th = 0.002
 dist_th_pcd=0.01
@@ -74,7 +74,7 @@ class GraspBuffer:
         self.vis.update_renderer()
         self.set_view()
 
-    def vis_grasps(self, pcd_shift=None, interactive_vis=False, fused_pose=False, amplify_kappa=False):
+    def vis_grasps(self, pcd_shift=None, interactive_vis=True, fused_pose=False, amplify_kappa=False):
 
         if len(self.buffer_dict["pcds"]) == 0:
             print("Buffer is empty, no grasp to visualize")
