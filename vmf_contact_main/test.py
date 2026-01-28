@@ -2,7 +2,8 @@ import argparse
 import logging
 import os
 from typing import Optional, cast
-
+import time
+import open3d as o3d
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import WandbLogger
 import sys, os
@@ -367,19 +368,11 @@ def main_module(
     main_module, ckpt_loaded = estimator.module_loader(args.ckpt)
     main_module = main_module.to("cuda")
     pcd = torch.load(f"env_4_epi_142_step_0_data.pt", map_location="cpu")["camera_3"]["pcd"]/1e3
-    
-    import time
-    import open3d as o3d
+
     pcd_bounds=torch.tensor([[0.2, -0.5, -0.5], [1.2, 0.5, 0.5]], dtype=torch.float32)
     pcd_shift = (pcd_bounds[0] + pcd_bounds[1]) / 2
     pcd_resize = pcd_bounds[1] - pcd_bounds[0]
 
-    # # visualize pointcloud
-    # pcd_o3d = o3d.geometry.PointCloud()
-    # pcd_o3d.points = o3d.utility.Vector3dVector(pcd.cpu().numpy())
-    # # coordinate frame
-    # axis = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.2, origin=[0, 0, 0])
-    # o3d.visualization.draw_geometries([pcd_o3d, axis])
 
     pcd = (pcd.view(-1, 3) - pcd_shift) / pcd_resize
     while True:
@@ -391,7 +384,7 @@ def main_module(
         prediction = main_module.inference(pcd.to("cuda"), 
                                            graspness_th=0.4, 
                                            grasp_height_th = 5e-3, 
-                                           vis=False, 
+                                           vis=True, 
                                            integrate=False, 
                                            fused_pose=False,
                                            interactive_vis=True,)
