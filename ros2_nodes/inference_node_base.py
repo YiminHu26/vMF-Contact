@@ -18,7 +18,8 @@ from tf2_ros.transform_listener import TransformListener
 from tf2_ros import StaticTransformBroadcaster
 from cv_bridge import CvBridge
 import cv2
-import os, torch
+import os
+# import torch
 from typing import List
 import numpy as np
 import copy
@@ -26,11 +27,11 @@ from tf_transformations import quaternion_matrix
 import tf2_geometry_msgs
 #import spatialmath as sm
 from .utils_node import *
-from lang_sam import LangSAM
+# from lang_sam import LangSAM
 from PIL import Image
-from ros2_nodes.utils_camera import *
-from active_grasp.spatial import *
-from active_grasp.vlm_utils.img_bbox_utils import *
+from ros2_nodes.camera_utils import *
+# from active_grasp.spatial import *
+# from active_grasp.vlm_utils.img_bbox_utils import *
 import signal
 current_file_folder = os.path.dirname(os.path.abspath(__file__))
 
@@ -134,7 +135,7 @@ class AIRNode(Node):
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        # fself.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self.last_point_cloud_msg = None
         self.shutdown = False
@@ -154,7 +155,7 @@ class AIRNode(Node):
         # self.camera_ready_pose = list_to_pose_stamped([-0.435, -0.572, 1.492, 0.995, 0.009, 0.005, 0.100], "world") # small finger
         self.drop_off_pose: PoseStamped = list_to_pose_stamped([0.15, -0.75, 1.4, 1.0, 0.0, 0.0, 0.0], "world")
 
-        self.langsam_model = LangSAM(sam_type="sam2.1_hiera_large") if use_langsam and len(obj_list) else None
+        # self.langsam_model = LangSAM(sam_type="sam2.1_hiera_large") if use_langsam and len(obj_list) else None
         self.input_ready = False
 
     
@@ -309,12 +310,12 @@ class AIRNode(Node):
             # print("depth_msg_stamp: ", stamp)
             # print("transform_msg_stamp: ", t_robot_2_camera.header.stamp)
     
-    def record_videos(self):
-        # start recording
-        record_orbbec_video(self, "color")
-        record_orbbec_video(self, "depth")
-        self.realsense_thread = threading.Thread(target=record_realsense_video)
-        self.realsense_thread.start()
+    # def record_videos(self):
+    #     # start recording
+    #     record_orbbec_video(self, "color")
+    #     record_orbbec_video(self, "depth")
+    #     self.realsense_thread = threading.Thread(target=record_realsense_video)
+    #     self.realsense_thread.start()
 
     def process_point_cloud_and_rgbd(self, save_data=False, pcd_only=False):
         # TODO: add rgb image processing
@@ -358,20 +359,20 @@ class AIRNode(Node):
             if file.endswith(".jpg"):
                 os.remove(os.path.join(current_file_folder, file))
         
-        # transformation to pose
-        cam_pose_robot = transform_to_pose(t_robot_2_camera.transform)
+        # # transformation to pose
+        # cam_pose_robot = transform_to_pose(t_robot_2_camera.transform)
 
-        pos = [cam_pose_robot.position.x - gaze_point_robot[0], 
-                   cam_pose_robot.position.y - gaze_point_robot[1], 
-                   cam_pose_robot.position.z - gaze_point_robot[2]]
-        azimuth, elevation = pos_to_azi_elev(pos)
+        # pos = [cam_pose_robot.position.x - gaze_point_robot[0], 
+        #            cam_pose_robot.position.y - gaze_point_robot[1], 
+        #            cam_pose_robot.position.z - gaze_point_robot[2]]
+        # azimuth, elevation = pos_to_azi_elev(pos)
 
-        return (pcd_numpy_base_link, 
-                self.last_image_msg, 
-                self.last_depth_msg.astype(np.float32) / 1000.0, 
-                cam_pose_robot, 
-                azimuth,
-                elevation), True
+        # return (pcd_numpy_base_link, 
+        #         self.last_image_msg, 
+        #         self.last_depth_msg.astype(np.float32) / 1000.0, 
+        #         cam_pose_robot, 
+        #         azimuth,
+        #         elevation), True
        
     def handle_user_input(self):
         raise NotImplementedError

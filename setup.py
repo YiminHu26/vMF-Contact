@@ -25,6 +25,7 @@ setup(
             "vmf = ros2_nodes.inference_node_vmf:main",
             "vlm = ros2_nodes.inference_node_vlm:main",
             "data = ros2_nodes.inference_node_data:main",
+            "visualization = ros2_nodes.test_visualization_node:main",
         ],
     },
 )
