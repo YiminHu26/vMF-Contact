@@ -8,3 +8,4 @@ logs_slurm/*
 diff
 wandb
 vmf_data
+.vscode/
