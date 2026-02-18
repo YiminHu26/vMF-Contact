@@ -18,7 +18,7 @@ services:
       - /tmp/.X11-unix:/tmp/.X11-unix
     network_mode: host
     environment:
-      - DISPLAY=:10
+      - DISPLAY=:1
     runtime: nvidia
     
     tty: true
