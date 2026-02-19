@@ -368,10 +368,16 @@ def main_module(
     main_module, ckpt_loaded = estimator.module_loader(args.ckpt)
     main_module = main_module.to("cuda")
     # pcd = torch.load(f"env_4_epi_142_step_0_data.pt", map_location="cpu")["camera_3"]["pcd"]/1e3
-    pcd = torch.load(f"vmf_input_pcd_base_1771421989_182810112.pt")
+    # pcd = torch.load(f"vmf_input_pcd_base_1771421989_182810112.pt")
+    # pcd = torch.load(f"vmf_input_pcd_base_1771513272_419227904.pt")
+    # pcd = torch.load(f"vmf_input_pcd_base_1771517855_611204096.pt")
+    pcd = torch.load(f"vmf_input_pcd_base_1771519029_725381120.pt")
 
     # pcd_bounds=torch.tensor([[0.2, -0.5, -0.5], [1.2, 0.5, 0.5]], dtype=torch.float32)
-    pcd_bounds=torch.tensor([[-0.43, -1.5, -0.43], [0.57, -0.5, 0.57]], dtype=torch.float32)
+    # pcd_bounds=torch.tensor([[-0.43, -1.5, -0.43], [0.57, -0.5, 0.57]], dtype=torch.float32)
+    # pcd_bounds=torch.tensor([[-0.5, -1.25, -0.6], [0.5, -0.25, 0.4]], dtype=torch.float32)
+    pcd_bounds=torch.tensor([[-0.5, -1.2, -0.6], [0.5, -0.2, 0.4]], dtype=torch.float32)
+
     pcd_shift = (pcd_bounds[0] + pcd_bounds[1]) / 2
     pcd_resize = pcd_bounds[1] - pcd_bounds[0]
 
@@ -380,9 +386,15 @@ def main_module(
     while True:
         t = time.time()
         # preprocess pointcloud
+        # pcd = pcd[(pcd[:, 0] > -0.5) & (pcd[:, 0] < 0.5)]
+        # pcd = pcd[(pcd[:, 1] > -0.5) & (pcd[:, 1] < 0.5)]
+        # pcd = pcd[(pcd[:, 2] > -0.05) & (pcd[:, 2] < 0.2)]   
+        # pcd = pcd[(pcd[:, 0] > -0.2) & (pcd[:, 0] < 0.2)]
+        # pcd = pcd[(pcd[:, 1] > -0.2) & (pcd[:, 1] < 0.2)]
+        # pcd = pcd[(pcd[:, 2] > -0.07) & (pcd[:, 2] < 0.2)]
         pcd = pcd[(pcd[:, 0] > -0.5) & (pcd[:, 0] < 0.5)]
         pcd = pcd[(pcd[:, 1] > -0.5) & (pcd[:, 1] < 0.5)]
-        pcd = pcd[pcd[:, 2] > -0.1]
+        pcd = pcd[(pcd[:, 2] > -0.05) & (pcd[:, 2] < 0.5)] 
         prediction = main_module.inference(pcd.to("cuda"), 
                                            graspness_th=0.7, 
                                            grasp_height_th = 5e-3, 
