@@ -1,0 +1,8 @@
+/home/jetson/vmf/install/robot_grasping/lib/python3.10/site-packages/vmf_contact_main/openpoints/dataset/semantic_kitti/helper_tool.py:212: SyntaxWarning: "is" with a literal. Did you mean "=="?
+  if dataset_name is 'S3DIS':
+/home/jetson/vmf/install/robot_grasping/lib/python3.10/site-packages/vmf_contact_main/openpoints/dataset/semantic_kitti/helper_tool.py:215: SyntaxWarning: "is" with a literal. Did you mean "=="?
+  elif dataset_name is 'Semantic3D':
+/home/jetson/vmf/install/robot_grasping/lib/python3.10/site-packages/openpoints/dataset/semantic_kitti/helper_tool.py:212: SyntaxWarning: "is" with a literal. Did you mean "=="?
+  if dataset_name is 'S3DIS':
+/home/jetson/vmf/install/robot_grasping/lib/python3.10/site-packages/openpoints/dataset/semantic_kitti/helper_tool.py:215: SyntaxWarning: "is" with a literal. Did you mean "=="?
+  elif dataset_name is 'Semantic3D':
