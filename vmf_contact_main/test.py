@@ -378,13 +378,15 @@ def main_module(
     # pcd_bounds=torch.tensor([[-0.43, -1.5, -0.43], [0.57, -0.5, 0.57]], dtype=torch.float32)
     # pcd_bounds=torch.tensor([[-0.5, -1.25, -0.6], [0.5, -0.25, 0.4]], dtype=torch.float32)
     # pcd_bounds=torch.tensor([[-0.5, -1.2, -0.6], [0.5, -0.2, 0.4]], dtype=torch.float32)
-    pcd_bounds=torch.tensor([[-0.5, -1.3, -0.6], [0.5, -0.3, 0.4]], dtype=torch.float32) # 240000 low & high
+    # pcd_bounds=torch.tensor([[-0.5, -1.3, -0.6], [0.5, -0.3, 0.4]], dtype=torch.float32) # 240000 low & high  # with bounds
     
-    pcd_shift = (pcd_bounds[0] + pcd_bounds[1]) / 2
-    pcd_resize = pcd_bounds[1] - pcd_bounds[0]
+    # pcd_shift = (pcd_bounds[0] + pcd_bounds[1]) / 2 # with bounds
+    # pcd_resize = pcd_bounds[1] - pcd_bounds[0] # with bounds
 
 
-    pcd = (pcd.view(-1, 3) - pcd_shift) / pcd_resize
+    # pcd = (pcd.view(-1, 3) - pcd_shift) / pcd_resize # with bounds
+
+    pcd = pcd.view(-1, 3) # without bounds
     while True:
         t = time.time()
         # preprocess pointcloud
@@ -404,12 +406,16 @@ def main_module(
         # pcd = pcd[(pcd[:, 1] > -0.3) & (pcd[:, 1] < 0.3)]
         # pcd = pcd[(pcd[:, 2] > -0.04) & (pcd[:, 2] < 0.5)] # 240000 low
 
-        pcd = pcd[(pcd[:, 0] > -0.2) & (pcd[:, 0] < 0.2)]
-        pcd = pcd[(pcd[:, 1] > -0.2) & (pcd[:, 1] < 0.3)]
-        pcd = pcd[(pcd[:, 2] > 0.065) & (pcd[:, 2] < 0.5)] # 40000 high
+        # pcd = pcd[(pcd[:, 0] > -0.2) & (pcd[:, 0] < 0.2)]
+        # pcd = pcd[(pcd[:, 1] > -0.2) & (pcd[:, 1] < 0.3)]
+        # pcd = pcd[(pcd[:, 2] > 0.065) & (pcd[:, 2] < 0.5)] # 40000 high
+
+        pcd = pcd[(pcd[:, 0] > -0.5) & (pcd[:, 0] < 0.5)]
+        pcd = pcd[(pcd[:, 1] > -1.5) & (pcd[:, 1] < -0.5)]
+        pcd = pcd[(pcd[:, 2] > -0.05) & (pcd[:, 2] < 0.5)] # 40000 high, without bounds
         
         prediction = main_module.inference(pcd.to("cuda"), 
-                                           graspness_th=0.4, 
+                                           graspness_th=0.7, 
                                            grasp_height_th = 5e-3, 
                                            vis=True, 
                                            integrate=False, 
