@@ -372,7 +372,9 @@ def main_module(
     # pcd = torch.load(f"vmf_input_pcd_base_1771513272_419227904.pt")
     # pcd = torch.load(f"vmf_input_pcd_base_1771517855_611204096.pt")
     # pcd = torch.load(f"vmf_input_pcd_base_1772027191_314213888.pt") # 240000 low
-    pcd = torch.load(f"vmf_input_pcd_base_1772028331_672243968.pt")  # 40000 high
+    # pcd = torch.load(f"vmf_input_pcd_base_1772028331_672243968.pt")  # 40000 high
+    pcd = torch.load(f"vmf_input_pcd_base_1772462174_661852928.pt") # 40000 front high
+
 
     # pcd_bounds=torch.tensor([[0.2, -0.5, -0.5], [1.2, 0.5, 0.5]], dtype=torch.float32)
     # pcd_bounds=torch.tensor([[-0.43, -1.5, -0.43], [0.57, -0.5, 0.57]], dtype=torch.float32)
@@ -392,7 +394,7 @@ def main_module(
         # preprocess pointcloud
         # pcd = pcd[(pcd[:, 0] > -0.5) & (pcd[:, 0] < 0.5)]
         # pcd = pcd[(pcd[:, 1] > -0.5) & (pcd[:, 1] < 0.5)]
-        # pcd = pcd[(pcd[:, 2] > -0.05) & (pcd[:, 2] < 0.2)]
+        # pcd = pcd[(pcd[:, 2] > -0.02)]
         #    
         # pcd = pcd[(pcd[:, 0] > -0.2) & (pcd[:, 0] < 0.2)]
         # pcd = pcd[(pcd[:, 1] > -0.2) & (pcd[:, 1] < 0.2)]
@@ -410,12 +412,16 @@ def main_module(
         # pcd = pcd[(pcd[:, 1] > -0.2) & (pcd[:, 1] < 0.3)]
         # pcd = pcd[(pcd[:, 2] > 0.065) & (pcd[:, 2] < 0.5)] # 40000 high
 
-        pcd = pcd[(pcd[:, 0] > -0.5) & (pcd[:, 0] < 0.5)]
-        pcd = pcd[(pcd[:, 1] > -1.5) & (pcd[:, 1] < -0.5)]
-        pcd = pcd[(pcd[:, 2] > -0.05) & (pcd[:, 2] < 0.5)] # 40000 high, without bounds
+        # pcd = pcd[(pcd[:, 0] > -0.5) & (pcd[:, 0] < 0.5)]
+        # pcd = pcd[(pcd[:, 1] > -1.5) & (pcd[:, 1] < -0.5)]
+        # pcd = pcd[(pcd[:, 2] > -0.05) & (pcd[:, 2] < 0.5)] # 40000 high, without bounds
+
+        pcd = pcd[(pcd[:, 0] > -1.0) & (pcd[:, 0] < 0)]
+        pcd = pcd[(pcd[:, 1] > -0.5) & (pcd[:, 1] < 0.5)]
+        pcd = pcd[(pcd[:, 2] > 0.1) & (pcd[:, 2] < 0.3)] # 40000 front high, without bounds
         
         prediction = main_module.inference(pcd.to("cuda"), 
-                                           graspness_th=0.7, 
+                                           graspness_th=0.8, 
                                            grasp_height_th = 5e-3, 
                                            vis=True, 
                                            integrate=False, 
