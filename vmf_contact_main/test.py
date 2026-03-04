@@ -368,53 +368,28 @@ def main_module(
     main_module, ckpt_loaded = estimator.module_loader(args.ckpt)
     main_module = main_module.to("cuda")
     # pcd = torch.load(f"env_4_epi_142_step_0_data.pt", map_location="cpu")["camera_3"]["pcd"]/1e3
-    # pcd = torch.load(f"vmf_input_pcd_base_1771421989_182810112.pt")
-    # pcd = torch.load(f"vmf_input_pcd_base_1771513272_419227904.pt")
-    # pcd = torch.load(f"vmf_input_pcd_base_1771517855_611204096.pt")
-    # pcd = torch.load(f"vmf_input_pcd_base_1772027191_314213888.pt") # 240000 low
     # pcd = torch.load(f"vmf_input_pcd_base_1772028331_672243968.pt")  # 40000 high
     pcd = torch.load(f"vmf_input_pcd_base_1772462174_661852928.pt") # 40000 front high
 
 
-    # pcd_bounds=torch.tensor([[0.2, -0.5, -0.5], [1.2, 0.5, 0.5]], dtype=torch.float32)
-    # pcd_bounds=torch.tensor([[-0.43, -1.5, -0.43], [0.57, -0.5, 0.57]], dtype=torch.float32)
-    # pcd_bounds=torch.tensor([[-0.5, -1.25, -0.6], [0.5, -0.25, 0.4]], dtype=torch.float32)
-    # pcd_bounds=torch.tensor([[-0.5, -1.2, -0.6], [0.5, -0.2, 0.4]], dtype=torch.float32)
-    # pcd_bounds=torch.tensor([[-0.5, -1.3, -0.6], [0.5, -0.3, 0.4]], dtype=torch.float32) # 240000 low & high  # with bounds
+    # pcd_bounds=torch.tensor([[0.2, -0.5, -0.5], [1.2, 0.5, 0.5]], dtype=torch.float32) # ifl demo
+    # pcd_bounds=torch.tensor([[-0.5, -1.3, -0.6], [0.5, -0.3, 0.4]], dtype=torch.float32) # 40000 high right 
     
-    # pcd_shift = (pcd_bounds[0] + pcd_bounds[1]) / 2 # with bounds
-    # pcd_resize = pcd_bounds[1] - pcd_bounds[0] # with bounds
+    # pcd_shift = (pcd_bounds[0] + pcd_bounds[1]) / 2 
+    # pcd_resize = pcd_bounds[1] - pcd_bounds[0] 
 
-
-    # pcd = (pcd.view(-1, 3) - pcd_shift) / pcd_resize # with bounds
-
+    # pcd = (pcd.view(-1, 3) - pcd_shift) / pcd_resize  # with bounds
     pcd = pcd.view(-1, 3) # without bounds
     while True:
         t = time.time()
         # preprocess pointcloud
         # pcd = pcd[(pcd[:, 0] > -0.5) & (pcd[:, 0] < 0.5)]
         # pcd = pcd[(pcd[:, 1] > -0.5) & (pcd[:, 1] < 0.5)]
-        # pcd = pcd[(pcd[:, 2] > -0.02)]
-        #    
-        # pcd = pcd[(pcd[:, 0] > -0.2) & (pcd[:, 0] < 0.2)]
-        # pcd = pcd[(pcd[:, 1] > -0.2) & (pcd[:, 1] < 0.2)]
-        # pcd = pcd[(pcd[:, 2] > -0.07) & (pcd[:, 2] < 0.2)]
-
-        # pcd = pcd[(pcd[:, 0] > -0.5) & (pcd[:, 0] < 0.5)]
-        # pcd = pcd[(pcd[:, 1] > -0.5) & (pcd[:, 1] < 0.5)]
-        # pcd = pcd[(pcd[:, 2] > -0.05) & (pcd[:, 2] < 0.5)] 
-
-        # pcd = pcd[(pcd[:, 0] > -0.3) & (pcd[:, 0] < 0.2)]
-        # pcd = pcd[(pcd[:, 1] > -0.3) & (pcd[:, 1] < 0.3)]
-        # pcd = pcd[(pcd[:, 2] > -0.04) & (pcd[:, 2] < 0.5)] # 240000 low
+        # pcd = pcd[(pcd[:, 2] > -0.02)] # ifl demo
 
         # pcd = pcd[(pcd[:, 0] > -0.2) & (pcd[:, 0] < 0.2)]
         # pcd = pcd[(pcd[:, 1] > -0.2) & (pcd[:, 1] < 0.3)]
-        # pcd = pcd[(pcd[:, 2] > 0.065) & (pcd[:, 2] < 0.5)] # 40000 high
-
-        # pcd = pcd[(pcd[:, 0] > -0.5) & (pcd[:, 0] < 0.5)]
-        # pcd = pcd[(pcd[:, 1] > -1.5) & (pcd[:, 1] < -0.5)]
-        # pcd = pcd[(pcd[:, 2] > -0.05) & (pcd[:, 2] < 0.5)] # 40000 high, without bounds
+        # pcd = pcd[(pcd[:, 2] > 0.065) & (pcd[:, 2] < 0.5)] # 40000 high right, with bounds
 
         pcd = pcd[(pcd[:, 0] > -1.0) & (pcd[:, 0] < 0)]
         pcd = pcd[(pcd[:, 1] > -0.5) & (pcd[:, 1] < 0.5)]
