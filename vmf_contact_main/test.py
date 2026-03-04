@@ -365,13 +365,17 @@ def main_module(
             strategy="ddp_find_unused_parameters_true" if not args.eval else "auto"
         ),
     )
+    # Clear GPU cache before loading checkpoint to avoid memory allocation errors
+    torch.cuda.empty_cache()
     main_module, ckpt_loaded = estimator.module_loader(args.ckpt)
     main_module = main_module.to("cuda")
     # pcd = torch.load(f"env_4_epi_142_step_0_data.pt", map_location="cpu")["camera_3"]["pcd"]/1e3
     # pcd = torch.load(f"vmf_input_pcd_base_1772028331_672243968.pt")  # 40000 high
-    pcd = torch.load(f"vmf_input_pcd_base_1772462174_661852928.pt") # 40000 front high
-
-
+    # pcd = torch.load(f"vmf_input_pcd_base_1772462174_661852928.pt") # 40000 front high
+    pcd = torch.load(f"vmf_input_pcd_base_1772636033_795956992.pt") # 40000 front high new 1
+    # pcd = torch.load(f"vmf_input_pcd_base_1772636072_130245888.pt") # 40000 front high new 2 horizontal
+    # pcd = torch.load(f"vmf_input_pcd_base_1772636177_373777920.pt") # 40000 front high new 3 vertical
+    
     # pcd_bounds=torch.tensor([[0.2, -0.5, -0.5], [1.2, 0.5, 0.5]], dtype=torch.float32) # ifl demo
     # pcd_bounds=torch.tensor([[-0.5, -1.3, -0.6], [0.5, -0.3, 0.4]], dtype=torch.float32) # 40000 high right 
     
@@ -391,12 +395,12 @@ def main_module(
         # pcd = pcd[(pcd[:, 1] > -0.2) & (pcd[:, 1] < 0.3)]
         # pcd = pcd[(pcd[:, 2] > 0.065) & (pcd[:, 2] < 0.5)] # 40000 high right, with bounds
 
-        pcd = pcd[(pcd[:, 0] > -1.0) & (pcd[:, 0] < 0)]
+        pcd = pcd[(pcd[:, 0] > -1.5) & (pcd[:, 0] < 1.5)]
         pcd = pcd[(pcd[:, 1] > -0.5) & (pcd[:, 1] < 0.5)]
-        pcd = pcd[(pcd[:, 2] > 0.1) & (pcd[:, 2] < 0.3)] # 40000 front high, without bounds
+        pcd = pcd[(pcd[:, 2] > 0.09) & (pcd[:, 2] < 0.3)] # 40000 front high, without bounds
         
         prediction = main_module.inference(pcd.to("cuda"), 
-                                           graspness_th=0.8, 
+                                           graspness_th=0.9, 
                                            grasp_height_th = 5e-3, 
                                            vis=True, 
                                            integrate=False, 
