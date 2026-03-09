@@ -372,18 +372,23 @@ def main_module(
     # pcd = torch.load(f"env_4_epi_142_step_0_data.pt", map_location="cpu")["camera_3"]["pcd"]/1e3
     # pcd = torch.load(f"vmf_input_pcd_base_1772028331_672243968.pt")  # 40000 high
     # pcd = torch.load(f"vmf_input_pcd_base_1772462174_661852928.pt") # 40000 front high
-    pcd = torch.load(f"vmf_input_pcd_base_1772636033_795956992.pt") # 40000 front high new 1
+    # pcd = torch.load(f"vmf_input_pcd_base_1772636033_795956992.pt") # 40000 front high new 1
     # pcd = torch.load(f"vmf_input_pcd_base_1772636072_130245888.pt") # 40000 front high new 2 horizontal
     # pcd = torch.load(f"vmf_input_pcd_base_1772636177_373777920.pt") # 40000 front high new 3 vertical
-    
+    # pcd = torch.load(f"vmf_input_pcd_base_1773068076_380884992.pt") # 240000 front high new 3 vertical
+    pcd = torch.load(f"vmf_input_pcd_base_1773069670_198106112.pt") # 40000 front high new new 3 vertical
+
+    # pcd = torch.load(f"vmf_input_pcd_base_1772719274_623702016.pt") # 40000 front low new 
     # pcd_bounds=torch.tensor([[0.2, -0.5, -0.5], [1.2, 0.5, 0.5]], dtype=torch.float32) # ifl demo
     # pcd_bounds=torch.tensor([[-0.5, -1.3, -0.6], [0.5, -0.3, 0.4]], dtype=torch.float32) # 40000 high right 
+    # pcd_bounds=torch.tensor([[-1.0, -0.5, -0.4], [0.0, -0.5, 0.6]], dtype=torch.float32) # 40000 front high new 1 2 3
+    # pcd_bounds=torch.tensor([[-1.0, -0.5, -0.5], [0.0, -0.5, 0.5]], dtype=torch.float32) # 40000 front low
     
     # pcd_shift = (pcd_bounds[0] + pcd_bounds[1]) / 2 
     # pcd_resize = pcd_bounds[1] - pcd_bounds[0] 
 
     # pcd = (pcd.view(-1, 3) - pcd_shift) / pcd_resize  # with bounds
-    pcd = pcd.view(-1, 3) # without bounds
+    # pcd = pcd.view(-1, 3) # without bounds
     while True:
         t = time.time()
         # preprocess pointcloud
@@ -395,20 +400,34 @@ def main_module(
         # pcd = pcd[(pcd[:, 1] > -0.2) & (pcd[:, 1] < 0.3)]
         # pcd = pcd[(pcd[:, 2] > 0.065) & (pcd[:, 2] < 0.5)] # 40000 high right, with bounds
 
-        pcd = pcd[(pcd[:, 0] > -1.5) & (pcd[:, 0] < 1.5)]
+        # pcd = pcd[(pcd[:, 0] > -1.5) & (pcd[:, 0] < 1.5)]
+        # pcd = pcd[(pcd[:, 1] > -0.5) & (pcd[:, 1] < 0.5)]
+        # pcd = pcd[(pcd[:, 2] > 0.09) & (pcd[:, 2] < 0.3)] # 40000 front high, without bounds
+
+        # pcd = pcd[(pcd[:, 0] > -1.5) & (pcd[:, 0] < 1.5)]
+        # pcd = pcd[(pcd[:, 1] > -0.5) & (pcd[:, 1] < 0.5)]
+        # pcd = pcd[(pcd[:, 2] > -0.01) & (pcd[:, 2] < 0.3)] # 40000 front high new 1 2 3, with bounds
+
+        pcd = pcd[(pcd[:, 0] > -1.0) & (pcd[:, 0] < 0.5)]
         pcd = pcd[(pcd[:, 1] > -0.5) & (pcd[:, 1] < 0.5)]
-        pcd = pcd[(pcd[:, 2] > 0.09) & (pcd[:, 2] < 0.3)] # 40000 front high, without bounds
+        pcd = pcd[(pcd[:, 2] > 0.09) & (pcd[:, 2] < 0.3)] # 40000 & 240000 front high new 1 2 3, without bounds
+
+        # pcd = pcd[(pcd[:, 0] > -1.5) & (pcd[:, 0] < 1.5)]
+        # pcd = pcd[(pcd[:, 1] > -0.5) & (pcd[:, 1] < 0.5)]
+        # pcd = pcd[(pcd[:, 2] > -0.05) & (pcd[:, 2] < 0.3)] # 40000 front low, without bounds
         
+        # pcd = pcd[(pcd[:, 0] > -0.5) & (pcd[:, 0] < 0.5)]
+        # pcd = pcd[(pcd[:, 1] > -0.5) & (pcd[:, 1] < 0.5)]
+        # pcd = pcd[(pcd[:, 2] > -0.1) & (pcd[:, 2] < 0.3)] # 40000 front low, with bounds
         prediction = main_module.inference(pcd.to("cuda"), 
-                                           graspness_th=0.9, 
-                                           grasp_height_th = 5e-3, 
+                                           graspness_th=0.8, 
+                                           grasp_height_th = 5e-3,
                                            vis=True, 
                                            integrate=False, 
                                            fused_pose=False,
                                            interactive_vis=True,)
         print(time.time()-t)
         print(prediction)
-
 
 if __name__ == "__main__":
     current_file_folder = os.path.dirname(os.path.abspath(__file__))
