@@ -9,3 +9,4 @@ termcolor
 shortuuid
 scipy
 scikit-learn
+tf_transformations

@@ -21,14 +21,16 @@ class AIRNodevMF(AIRNode):
     def __init__(self):
         super().__init__(use_langsam=False)
 
-        self.pcd_shift=np.array([-0.86, 0.1, 0.0])
-        self.pcd_center = list_to_pose_stamped(self.pcd_shift.tolist() + [0., 0., 0., 1.], "base_link")
-        self.publish_new_frame("center", self.pcd_center)
+        # self.pcd_shift=np.array([-0.86, 0.1, 0.0])
+        # self.pcd_center = list_to_pose_stamped(self.pcd_shift.tolist() + [0., 0., 0., 1.], "base_link")
+        # self.publish_new_frame("center", self.pcd_center)
 
         self.user_input_thread = threading.Thread(target=self.handle_user_input)
         self.user_input_thread.start()
         self.agent = main_module(parse_args_from_yaml(current_file_folder + "/../vmf_contact_main/config.yaml"), learning=False)
-        self.set_vel_acc(.3, .1)
+        # publisher for the chosen pose (translation + quaternion as 7 values)
+        self.pose_pub = self.create_publisher(PoseStamped, '/arm_vmf/pose_chosen', 10)
+        # self.set_vel_acc(.3, .1)
 
     
     def process_point_cloud(self):
@@ -87,7 +89,7 @@ class AIRNodevMF(AIRNode):
     
     def handle_user_input(self):
         while True:
-            self.to_camera_ready_pose()
+            # self.to_camera_ready_pose()
             user_input = input("Enter 's' to start next capture and 'q' to quit: ")
             if user_input == "s":
                 (pcd, rgb, d, cam_pose, _, _), identifier = self.process_point_cloud_and_rgbd()
@@ -95,29 +97,50 @@ class AIRNodevMF(AIRNode):
                     print("No object detected, please try again.")
                     continue
 
-                grasp, grasp_criterien = self.agent_inference(pcd)
+                grasp, _ = self.agent_inference(pcd)
+                # grasp is a 7-element list: [x, y, z, qx, qy, qz, qw]
                 if grasp is not None:
-                    pose = self.process_grasp(grasp)
-                    success = self.execute_grasp(pose)
+                    # pose = self.process_grasp(grasp)
+                    # success = self.execute_grasp(pose)
+                    self._publish_pose_list(grasp)
                 else:
                     print("No grasp pose detected, please try again.")
             elif user_input == "q":
                 self.shutdown = True
                 break
 
-    def process_grasp(self, pose):
-        pose = list_to_pose(pose)
-        return pose
+    # def process_grasp(self, pose):
+    #     pose = list_to_pose(pose)
+    #     return pose
     
-    def agent_inference(self, pcd_raw):
+    def _publish_pose_list(self, pose_list):
+        """Publish a 7-element pose (x,y,z,qx,qy,qz,qw) as a PoseStamped message."""
+        msg = PoseStamped()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = "base_link"
+        msg.pose.position.x = pose_list[0]
+        msg.pose.position.y = pose_list[1]
+        msg.pose.position.z = pose_list[2]
+        msg.pose.orientation.x = pose_list[3]
+        msg.pose.orientation.y = pose_list[4]
+        msg.pose.orientation.z = pose_list[5]
+        msg.pose.orientation.w = pose_list[6]
+        self.pose_pub.publish(msg)
+
+    def agent_inference(self, pcd):
         # TODO: add criteria for grasp execution
         # Process the point cloud
-        self.pcd_shift = pcd_raw.mean(axis=0)
-        self.pcd_shift[2] = 0.0
-        pcd = (pcd_raw - self.pcd_shift) 
-        pcd = pcd[(pcd[:, 0] > -O_SIZE) & (pcd[:, 0] < O_SIZE)]
-        pcd = pcd[(pcd[:, 1] > -O_SIZE) & (pcd[:, 1] < O_SIZE)]
-        pcd = pcd[(pcd[:, 2] > 0.03) & (pcd[:, 2] < 0.45)]
+        # self.pcd_shift = pcd_raw.mean(axis=0)
+        # self.pcd_shift[2] = 0.0
+        # pcd = (pcd_raw - self.pcd_shift) 
+        # pcd = pcd[(pcd[:, 0] > -O_SIZE) & (pcd[:, 0] < O_SIZE)]
+        # pcd = pcd[(pcd[:, 1] > -O_SIZE) & (pcd[:, 1] < O_SIZE)]
+        # pcd = pcd[(pcd[:, 2] > 0.03) & (pcd[:, 2] < 0.45)]
+
+        pcd = pcd[(pcd[:, 0] > -1.0) & (pcd[:, 0] < 0.5)]
+        pcd = pcd[(pcd[:, 1] > -0.5) & (pcd[:, 1] < 0.5)]
+        pcd = pcd[(pcd[:, 2] > 0.09) & (pcd[:, 2] < 0.3)]
+
 
         print("Processed point cloud: ", pcd.shape)
 
@@ -131,39 +154,14 @@ class AIRNodevMF(AIRNode):
         # )
         # o3d.visualization.draw_geometries([o3d_pcd, mesh_frame])
 
-        # Process the prompt point cloud
-        if self.langsam_model is not None:
-            pcd_from_prompt = []
-            for label in self.masked_pcd_dict:
-                pcd_from_prompt.append(self.masked_pcd_dict[label])
-                break
-            pcd_from_prompt = np.concatenate(pcd_from_prompt, axis=0)
-            pcd_from_prompt = (pcd_from_prompt - self.pcd_shift) 
-            print("Prompt point cloud: ", pcd_from_prompt.shape)
-        else:
-            pcd_from_prompt = None
-
-        # draw the point cloud and prompt point cloud
-        # o3d_pcd = o3d.geometry.PointCloud(
-        #     o3d.utility.Vector3dVector(pcd)
-        # )
-        # o3d_pcd_from_prompt = o3d.geometry.PointCloud(
-        #     o3d.utility.Vector3dVector(pcd_from_prompt)
-        # )
-        # # draw  the origin as a red sphere
-        # mesh_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(
-        #     size=0.1, origin=[0, 0, 0]
-        # )
-        # o3d.visualization.draw_geometries([o3d_pcd_from_prompt, mesh_frame])
-
-
-        # inference
-        pose_chosen = self.agent.inference(pcd, 
-                                        pcd_from_prompt=pcd_from_prompt,
-                                        shift=self.pcd_shift,
-                                        graspness_th=0.7,
-                                        grasp_height_th = 5e-3,
-                                        fused_pose=True)
+        # inference (no prompt point cloud required)
+        pose_chosen = self.agent.inference(pcd.to("cuda"), 
+                                           graspness_th=0.9, 
+                                           grasp_height_th = 5e-3, 
+                                           vis=True, 
+                                           integrate=False, 
+                                           fused_pose=False,
+                                           interactive_vis=True,)
         # Add the new geometry for the current frame
 
         if pose_chosen is None:
@@ -196,9 +194,12 @@ class AIRNodevMF(AIRNode):
         # print("Chosen quaternion: ", quat)
 
         pose_chosen = np.concatenate([translation, quat])
-        print("Chosen pose: ", pose_chosen)
+        pose_list = pose_chosen.tolist()
+        print("Chosen pose: ", pose_list)
+        # publish the pose to ROS topic
+        self._publish_pose_list(pose_list)
 
-        return pose_chosen, False
+        return pose_list, False
 
 
 def main(args=None):
