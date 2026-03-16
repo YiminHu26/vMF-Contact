@@ -21,17 +21,22 @@ import cv2
 import os, torch
 from typing import List
 import numpy as np
+
+# Compatibility shim for deps that still reference np.float (removed in NumPy 1.24).
+if not hasattr(np, "float"):
+    np.float = float  # type: ignore[attr-defined]
+
 import copy
 from tf_transformations import quaternion_matrix
 import tf2_geometry_msgs
 #import spatialmath as sm
 from .utils_node import *
-from lang_sam import LangSAM
+# from lang_sam import LangSAM
 from PIL import Image
 import message_filters
 from ros2_nodes.utils_camera import *
-from active_grasp.spatial import *
-from active_grasp.vlm_utils.img_bbox_utils import *
+# from active_grasp.spatial import *
+# from active_grasp.vlm_utils.img_bbox_utils import *
 import signal
 current_file_folder = os.path.dirname(os.path.abspath(__file__))
 from builtin_interfaces.msg import Duration
@@ -1025,7 +1030,6 @@ class AIRNode(Node):
                 tcp_pose_to_world, _ = self.camera_robot_pose_to_tcp_world_pose(cam_pose_to_robot)
                 path.append(tcp_pose_to_world)
             return path
-
 
 
 

@@ -8,18 +8,25 @@ from vmf_contact_main.train import main_module, parse_args_from_yaml
 from cv_bridge import CvBridge
 import os, torch
 import numpy as np
+
+# Compatibility shim for deps that still reference np.float (removed in NumPy 1.24).
+if not hasattr(np, "float"):
+    np.float = float  # type: ignore[attr-defined]
+
 import copy
 from tf_transformations import quaternion_from_matrix, translation_from_matrix
 from PIL import Image
 from ros2_nodes.utils_camera import *
 import time
 
+
 O_SIZE = .3
 
 class AIRNodevMF(AIRNode):
 
     def __init__(self):
-        super().__init__(use_langsam=False)
+        # super().__init__(use_langsam=False)
+        super().__init__("vmf_node")
 
         # self.pcd_shift=np.array([-0.86, 0.1, 0.0])
         # self.pcd_center = list_to_pose_stamped(self.pcd_shift.tolist() + [0., 0., 0., 1.], "base_link")
@@ -216,6 +223,5 @@ def main(args=None):
 
 if __name__ == "__main__":
     main()
-
 
 
