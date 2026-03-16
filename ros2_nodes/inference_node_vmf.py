@@ -36,7 +36,7 @@ class AIRNodevMF(AIRNode):
         self.user_input_thread.start()
         self.agent = main_module(parse_args_from_yaml(current_file_folder + "/../vmf_contact_main/config.yaml"), learning=False)
         # publisher for the chosen pose (translation + quaternion as 7 values)
-        self.pose_pub = self.create_publisher(PoseStamped, '/arm_vmf/pose_chosen', 10)
+        self.pose_publisher_ = self.create_publisher(PoseStamped, '/arm_vmf/pose_chosen', 10)
         # self.set_vel_acc(.3, .1)
 
     
@@ -120,7 +120,7 @@ class AIRNodevMF(AIRNode):
     #     pose = list_to_pose(pose)
     #     return pose
     
-    def _publish_pose_list(self, pose_list):
+    def publish_pose_list_(self, pose_list):
         """Publish a 7-element pose (x,y,z,qx,qy,qz,qw) as a PoseStamped message."""
         msg = PoseStamped()
         msg.header.stamp = self.get_clock().now().to_msg()
@@ -132,7 +132,7 @@ class AIRNodevMF(AIRNode):
         msg.pose.orientation.y = pose_list[4]
         msg.pose.orientation.z = pose_list[5]
         msg.pose.orientation.w = pose_list[6]
-        self.pose_pub.publish(msg)
+        self.pose_publisher_.publish(msg)
 
     def agent_inference(self, pcd):
         # TODO: add criteria for grasp execution
@@ -204,7 +204,7 @@ class AIRNodevMF(AIRNode):
         pose_list = pose_chosen.tolist()
         print("Chosen pose: ", pose_list)
         # publish the pose to ROS topic
-        self._publish_pose_list(pose_list)
+        self.publish_pose_list_(pose_list)
 
         return pose_list, False
 

@@ -1,0 +1,477 @@
+import argparse
+import logging
+import os
+from typing import Optional, cast
+import time
+import open3d as o3d
+import pytorch_lightning as pl
+from pytorch_lightning.loggers import WandbLogger
+import sys, os
+import rclpy
+from geometry_msgs.msg import PoseStamped
+import numpy as np
+# Compatibility shim for deps that still reference np.float (removed in NumPy 1.24).
+if not hasattr(np, "float"):
+    np.float = float  # type: ignore[attr-defined]
+    
+from tf_transformations import quaternion_from_matrix, translation_from_matrix
+
+current_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(os.path.join(current_dir, '.'))
+
+import torch
+print(torch.__version__)
+print("Cuda available: ", torch.cuda.is_available())
+print("Cuda device number: ", torch.cuda.device_count())
+
+
+data_path = os.environ.get("LSDFPROJECTS")
+if data_path is None or not os.path.exists(data_path):
+    data_path = ".."
+assert os.path.exists(data_path), f"Data path {data_path} does not exist. Please set it."
+print(f"Current data path: {data_path}")
+
+from vmf_contact import vmfContactModule
+from vmf_contact import DATASET_REGISTRY
+from openpoints.utils import EasyConfig
+import glob
+import warnings
+
+def suppress_pytorch_lightning_logs():
+    """
+    Suppresses annoying PyTorch Lightning logs.
+    """
+    warnings.filterwarnings("ignore", ".*Consider increasing the value of the `num_workers`.*")
+    warnings.filterwarnings("ignore", ".*this may lead to large memory footprint.*")
+    warnings.filterwarnings("ignore", ".*DataModule.setup has already been called.*")
+    warnings.filterwarnings("ignore", ".*DataModule.teardown has already been called.*")
+    warnings.filterwarnings("ignore", ".*Set the gpus flag in your trainer.*")
+    warnings.filterwarnings("ignore", ".*It is recommended to use.*")
+    logging.getLogger("pytorch_lightning").setLevel(logging.ERROR)
+
+logger = logging.getLogger(__name__)
+
+
+def get_args_parser(
+    description: Optional[str] = None,
+    add_help: bool = True,
+):
+    parser = argparse.ArgumentParser(
+        description=description,
+        add_help=add_help,
+    )
+    # Training
+    parser.add_argument(
+        "--devices",
+        type=int,
+        default=4,
+        help="Distributed training device number",
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Whether to run in debug mode",
+    )
+    parser.add_argument(
+        "--learning_rate",
+        type=float,
+        default=1e-5,
+        help="Learning rate",
+    )
+    parser.add_argument(
+        "--learning_rate_score",
+        type=float,
+        default=3e-4,
+        help="Learning rate",
+    )
+    parser.add_argument(
+        "--learning_rate_decay",
+        type=float,
+        default=5e-4,
+        help="Learning rate decay",
+    )
+    parser.add_argument(
+        "--run-finetuning",
+        action="store_true",
+        help="Whether to run finetuning",
+    )
+    parser.add_argument(
+        "--max_epochs",
+        type=int,
+        default=20000,
+        help="Maximum number of epochs",
+    )
+    parser.add_argument(
+        "--flow_finetune",
+        type=int,
+        default=0,
+        help="Number of warmup epochs",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=4,
+        help="Batch Size (per GPU)",
+    )
+    parser.add_argument(
+        "--epoch-length",
+        type=int,
+        help="Length of an epoch in number of iterations",
+    )
+    parser.add_argument(
+        "--learning-rates",
+        nargs="+",
+        type=float,
+        help="Learning rates to grid search.",
+    )
+    parser.add_argument(
+        "--camera-num",
+        type=int,
+        help="Number of cameras",
+        default=2,
+    )
+    parser.add_argument(
+        "--gradient-accumulation-steps",
+        type=int,
+        default=1,
+        help="Number of gradient accumulation steps",
+    )
+    parser.add_argument(
+        "--eval",
+        action="store_true",
+        help="Whether to evaluate the model",
+    )
+    parser.add_argument(
+        "--ckpt",
+        type=str,
+        default=None,
+        help="Checkpoint to validate, if None then training",
+    )
+    # Data module
+    parser.add_argument(
+        "--data-root-dir",
+        type=str,
+        help="Root directory of the data",
+        default="dataset/vmf_data",
+    )
+    parser.add_argument(
+        "--num_workers",
+        type=int,
+        default=4,
+        help="Embedding dimension vmfContact",
+    )
+    parser.add_argument(
+        "--image-size",
+        type=int,
+        nargs=2,
+        default=(480, 640),
+        help="Image size",
+    )
+    parser.add_argument(
+        "--pcd_with_rgb",
+        action="store_true",
+        help="Whether to use RGB with PCD",
+    )
+    parser.add_argument(
+        "--scale",
+        type=float,
+        default=7 / 8,
+        help="Image size",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed",
+    )
+    parser.add_argument(
+        "--experiment",
+        type=str,
+        default=None,
+        help="Experiment name",
+    )
+    parser.add_argument(
+        "--dataset",
+        type=str,
+        default="mgn",
+        help="Dataset name",
+    )
+    ## Uncertainty
+    parser.add_argument(
+        "--prob_baseline",
+        type=str,
+        default=None,
+        choices=["post", "lh", None],
+        help="Baseline vector modeled as a constant or a learnable parameter",
+    )
+    parser.add_argument(
+        "--certainty_budget",
+        type=str,
+        default="constant",
+        help="Certainty budget",
+    )
+    parser.add_argument(
+        "--entropy_weight",
+        type=float,
+        default=1e-6,
+        help="The weight for the entropy regularizer.",
+    )
+
+    parser.add_argument(
+        "--flow_layers",
+        type=int,
+        default=4,
+        help="Number of flow layers",
+    )
+
+    parser.add_argument(
+        "--point_backbone",
+        type=str,
+        default=None,
+        choices=["pointnet++", "pointnext-s", "pointnext-b", "pointnext-l","spotr", "dgcnn"],
+    )
+    # Flow
+    parser.add_argument(
+        "--hidden_feat_flow",
+        type=int,
+        default=512,
+        help="Hidden feature size for the flow",
+    )
+    parser.add_argument(
+        "--embedding_dim",
+        type=int,
+        default=256,
+        help="Embedding dimension vmfContact",
+    )
+
+    parser.add_argument(
+        "--backbone",
+        type=str,
+        default="clip",
+        choices=["clip", "vits", "vitb", "vitl", "vitg", "resnet"],
+    )
+
+    parser.add_argument(
+        "--flow_type",
+        type=str,
+        default="resflow",
+        choices=["resflow", "glow"],
+    )
+
+    parser.set_defaults(
+        epochs=10,
+        num_workers=10,
+        epoch_length=1250,
+        learning_rates=[
+            1e-5,
+            2e-5,
+            5e-5,
+            1e-4,
+            2e-4,
+            5e-4,
+            1e-3,
+            2e-3,
+            5e-3,
+            1e-2,
+            2e-2,
+            5e-2,
+            0.1,
+        ],
+        data_root_dir=[f"{data_path}/vmf_data"],
+    )
+    return parser
+
+
+import yaml
+print(f"{data_path}/dataset/vmf_data/data*")
+
+def parse_args_from_yaml(config_path: str = current_dir + "/config.yaml"):
+    # Load default configurations from YAML
+    with open(config_path, 'r') as f:
+        yaml_config = yaml.safe_load(f)
+
+    # Create the argument parser
+    parser = get_args_parser()
+
+    # Set defaults from YAML file
+    parser.set_defaults(**yaml_config)
+
+    # Parse command-line arguments (they will override YAML defaults)
+    args = parser.parse_args()
+
+    print(args)
+
+    return args
+    
+
+def main_module(
+    args: argparse.Namespace,
+    learning: bool = True,
+):
+    logging.getLogger("vmf_contact").setLevel(logging.INFO)
+    suppress_pytorch_lightning_logs()
+
+    # Fix randomness
+    pl.seed_everything(args.seed)
+    logger.info("Using seed %s.", os.getenv("PL_GLOBAL_SEED"))
+    point_backbone_cfgs = EasyConfig()
+    current_file_path = os.path.abspath(__file__)
+    directory_path = os.path.dirname(current_file_path)
+    print(f"{directory_path}/../vmf_contact_main/cfgs/vmfcontact/*.yaml")
+    cfgs = glob.glob(f"{directory_path}/../vmf_contact_main/cfgs/vmfcontact/*.yaml")
+    for cfg in cfgs:
+        if args.point_backbone in cfg:
+            print(f"Loading {cfg}")
+            setattr(args, "point_backbone_cfgs", cfg)
+            break
+    else:
+        raise ValueError(f"Point backbone {args.point_backbone} not found.")
+    point_backbone_cfgs.load(args.point_backbone_cfgs, recursive=True)
+    args.point_backbone_cfgs = point_backbone_cfgs
+
+    if args.debug:
+        args.batch_size = 1
+
+    # Initialize logger if needed
+    if args.experiment is not None and not args.debug:
+        remote_logger = WandbLogger(name=args.experiment, project="vmf_contact")
+        try:
+            remote_logger.experiment.config.update(
+                {
+                    "seed": os.getenv("PL_GLOBAL_SEED"),
+                    "dataset": args.dataset,
+                    "flow_type": "residual",
+                    "flow_layers": args.flow_layers,
+                    "certainty_budget": args.certainty_budget,
+                    "learning_rate": args.learning_rate,
+                    "learning_rate_decay": args.learning_rate_decay,
+                    "max_epochs": args.max_epochs,
+                    "entropy_weight": args.entropy_weight,
+                    "flow_finetune": args.flow_finetune,
+                    "run_finetuning": args.run_finetuning,
+                }
+            )
+        except:
+            print("Dummy remote logger")
+            remote_logger = None
+    else:
+        remote_logger = None
+
+    dm = DATASET_REGISTRY[args.dataset](
+        args, seed=int(os.getenv("PL_GLOBAL_SEED") or 0)
+    )
+
+    estimator = vmfContactModule(
+        args,
+        finetune=args.run_finetuning,
+        user_params=dict(
+            max_epochs=args.max_epochs,
+            logger=remote_logger,
+            accelerator="gpu",
+            default_root_dir="logs",
+            devices= 1 if args.debug or args.eval else args.devices,
+            strategy="ddp_find_unused_parameters_true" if not args.eval else "auto"
+        ),
+    )
+    # Clear GPU cache before loading checkpoint to avoid memory allocation errors
+    torch.cuda.empty_cache()
+    main_module, ckpt_loaded = estimator.module_loader(args.ckpt)
+    main_module = main_module.to("cuda")
+    # pcd = torch.load(f"env_4_epi_142_step_0_data.pt", map_location="cpu")["camera_3"]["pcd"]/1e3
+    # pcd = torch.load(f"vmf_input_pcd_base_1772028331_672243968.pt")  # 40000 high
+    # pcd = torch.load(f"vmf_input_pcd_base_1772462174_661852928.pt") # 40000 front high
+    # pcd = torch.load(f"vmf_input_pcd_base_1772636033_795956992.pt") # 40000 front high new 1
+    # pcd = torch.load(f"vmf_input_pcd_base_1772636072_130245888.pt") # 40000 front high new 2 horizontal
+    # pcd = torch.load(f"vmf_input_pcd_base_1772636177_373777920.pt") # 40000 front high new 3 vertical
+    # pcd = torch.load(f"vmf_input_pcd_base_1773068076_380884992.pt") # 240000 front high new 3 vertical
+    pcd = torch.load(f"{directory_path}/../vmf_input_pcd_base_1773069670_198106112.pt") # 40000 front high new new 3 vertical
+
+    # Initialize ROS 2 for publishing grasp poses
+    rclpy.init(args=None)
+    ros_node = rclpy.create_node("vmf_inference_publisher")
+    pose_publisher = ros_node.create_publisher(PoseStamped, "/arm_vmf/pose_chosen", 10)
+
+    # pcd = torch.load(f"vmf_input_pcd_base_1772719274_623702016.pt") # 40000 front low new 
+    # pcd_bounds=torch.tensor([[0.2, -0.5, -0.5], [1.2, 0.5, 0.5]], dtype=torch.float32) # ifl demo
+    # pcd_bounds=torch.tensor([[-0.5, -1.3, -0.6], [0.5, -0.3, 0.4]], dtype=torch.float32) # 40000 high right 
+    # pcd_bounds=torch.tensor([[-1.0, -0.5, -0.4], [0.0, -0.5, 0.6]], dtype=torch.float32) # 40000 front high new 1 2 3
+    # pcd_bounds=torch.tensor([[-1.0, -0.5, -0.5], [0.0, -0.5, 0.5]], dtype=torch.float32) # 40000 front low
+    
+    # pcd_shift = (pcd_bounds[0] + pcd_bounds[1]) / 2 
+    # pcd_resize = pcd_bounds[1] - pcd_bounds[0] 
+
+    # pcd = (pcd.view(-1, 3) - pcd_shift) / pcd_resize  # with bounds
+    # pcd = pcd.view(-1, 3) # without bounds
+    try:
+        while True:
+            t = time.time()
+            # preprocess pointcloud
+            # pcd = pcd[(pcd[:, 0] > -0.5) & (pcd[:, 0] < 0.5)]
+            # pcd = pcd[(pcd[:, 1] > -0.5) & (pcd[:, 1] < 0.5)]
+            # pcd = pcd[(pcd[:, 2] > -0.02)] # ifl demo
+
+            # pcd = pcd[(pcd[:, 0] > -0.2) & (pcd[:, 0] < 0.2)]
+            # pcd = pcd[(pcd[:, 1] > -0.2) & (pcd[:, 1] < 0.3)]
+            # pcd = pcd[(pcd[:, 2] > 0.065) & (pcd[:, 2] < 0.5)] # 40000 high right, with bounds
+
+            # pcd = pcd[(pcd[:, 0] > -1.5) & (pcd[:, 0] < 1.5)]
+            # pcd = pcd[(pcd[:, 1] > -0.5) & (pcd[:, 1] < 0.5)]
+            # pcd = pcd[(pcd[:, 2] > 0.09) & (pcd[:, 2] < 0.3)] # 40000 front high, without bounds
+
+            # pcd = pcd[(pcd[:, 0] > -1.5) & (pcd[:, 0] < 1.5)]
+            # pcd = pcd[(pcd[:, 1] > -0.5) & (pcd[:, 1] < 0.5)]
+            # pcd = pcd[(pcd[:, 2] > -0.01) & (pcd[:, 2] < 0.3)] # 40000 front high new 1 2 3, with bounds
+
+            pcd = pcd[(pcd[:, 0] > -1.0) & (pcd[:, 0] < 0.5)]
+            pcd = pcd[(pcd[:, 1] > -0.5) & (pcd[:, 1] < 0.5)]
+            pcd = pcd[(pcd[:, 2] > 0.09) & (pcd[:, 2] < 0.3)] # 40000 & 240000 front high new 1 2 3, without bounds
+
+            # pcd = pcd[(pcd[:, 0] > -1.5) & (pcd[:, 0] < 1.5)]
+            # pcd = pcd[(pcd[:, 1] > -0.5) & (pcd[:, 1] < 0.5)]
+            # pcd = pcd[(pcd[:, 2] > -0.05) & (pcd[:, 2] < 0.3)] # 40000 front low, without bounds
+            
+            # pcd = pcd[(pcd[:, 0] > -0.5) & (pcd[:, 0] < 0.5)]
+            # pcd = pcd[(pcd[:, 1] > -0.5) & (pcd[:, 1] < 0.5)]
+            # pcd = pcd[(pcd[:, 2] > -0.1) & (pcd[:, 2] < 0.3)] # 40000 front low, with bounds
+            prediction = main_module.inference(pcd.to("cuda"), 
+                                               graspness_th=0.8, 
+                                               grasp_height_th = 5e-3,
+                                               vis=True, 
+                                               integrate=False, 
+                                               fused_pose=False,
+                                               interactive_vis=True,)
+            print(time.time()-t)
+            print(prediction)
+
+            if prediction is None:
+                continue
+
+            
+            if isinstance(prediction, torch.Tensor):
+                prediction = prediction.numpy()
+            if getattr(prediction, "ndim", 0) == 3:
+                prediction = prediction[0]
+
+            quat = quaternion_from_matrix(prediction)
+            translation = translation_from_matrix(prediction)
+
+            msg = PoseStamped()
+            msg.header.stamp = ros_node.get_clock().now().to_msg()
+            msg.header.frame_id = "base_link"
+            msg.pose.position.x = float(translation[0])
+            msg.pose.position.y = float(translation[1])
+            msg.pose.position.z = float(translation[2])
+            msg.pose.orientation.x = float(quat[0])
+            msg.pose.orientation.y = float(quat[1])
+            msg.pose.orientation.z = float(quat[2])
+            msg.pose.orientation.w = float(quat[3])
+            pose_publisher.publish(msg)
+    finally:
+        ros_node.destroy_node()
+        rclpy.shutdown()
+
+if __name__ == "__main__":
+    current_file_folder = os.path.dirname(os.path.abspath(__file__))
+    #args = get_args_parser(add_help=True).parse_args()
+    main_module(parse_args_from_yaml(current_file_folder + "/config.yaml"))
+    #main_module(args)
