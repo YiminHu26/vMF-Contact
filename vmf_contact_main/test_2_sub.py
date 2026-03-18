@@ -8,6 +8,7 @@ import pytorch_lightning as pl
 from pytorch_lightning.loggers import WandbLogger
 import sys, os
 import rclpy
+from rclpy.duration import Duration as RclpyDuration
 from geometry_msgs.msg import PoseStamped
 import numpy as np
 # Compatibility shim for deps that still reference np.float (removed in NumPy 1.24).
@@ -18,6 +19,9 @@ from tf_transformations import quaternion_from_matrix, translation_from_matrix
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(os.path.join(current_dir, '.'))
+parent_dir = os.path.dirname(current_dir)
+if parent_dir not in sys.path:
+    sys.path.append(parent_dir)
 
 import torch
 print(torch.__version__)
@@ -304,6 +308,164 @@ def parse_args_from_yaml(config_path: str = current_dir + "/config.yaml"):
     return args
     
 
+import torch
+from ros2_nodes.inference_node_base import *
+from ros2_nodes.utils_camera import *
+from ros2_nodes.utils_node import *
+
+
+class InferenceTest2(AIRNode):
+    """
+    ROS2 node that waits for depth + camera info, computes a base_link point cloud,
+    runs inference once, publishes the pose, then shuts down.
+    """
+
+    def __init__(self, args: argparse.Namespace, model: torch.nn.Module):
+        super().__init__()
+        self.args = args
+        self.model = model
+        self.pose_publisher = self.create_publisher(PoseStamped, "/arm_vmf/pose_chosen", 10)
+        self.inference_done = False
+        self._tf_wait_logged = False
+        self.get_logger().info("Waiting for depth + camera info...")
+        self.timer = self.create_timer(0.1, self._tick)
+
+    def _inputs_ready(self) -> bool:
+        return self.last_depth_msg is not None and self.camera_matrix is not None
+
+    def _tf_ready(self) -> bool:
+        try:
+            ready = self.tf_buffer.can_transform(
+                "base_link",
+                "orbbec_femto_mega_link",
+                rclpy.time.Time(),
+                timeout=RclpyDuration(seconds=0.2),
+            )
+        except Exception as exc:
+            if not self._tf_wait_logged:
+                self.get_logger().warning(f"TF not ready yet: {exc}")
+                self._tf_wait_logged = True
+            return False
+
+        if not ready and not self._tf_wait_logged:
+            self.get_logger().info(
+                "Waiting for TF: base_link -> orbbec_femto_mega_link"
+            )
+            self._tf_wait_logged = True
+        if ready:
+            self._tf_wait_logged = False
+        return ready
+
+    def _tick(self) -> None:
+        if self.inference_done:
+            self.get_logger().info("Inference already done, skipping.")
+            return
+        if not self._inputs_ready():
+            self.get_logger().warning("Inputs not ready.")
+            return
+        if not self._tf_ready():
+            self.get_logger().warning("TF not ready.")
+            return
+
+        try:
+            pcd_from_saver = self.compute_pcd_base(target_points=40000)
+            self.run_inference_once(pcd_from_saver)
+        except Exception as exc:
+            self.get_logger().error(f"Inference failed: {exc}")
+        finally:
+            self.inference_done = True
+            self.get_logger().info("Inference complete. Shutting down.")
+            rclpy.shutdown()
+
+    def compute_pcd_base(self, target_points: int = 40000) -> np.ndarray:
+        if self.last_depth_msg is None or self.camera_matrix is None:
+            raise RuntimeError("Depth or camera info not ready.")
+
+        depth_image = self.last_depth_msg
+        self.get_logger().info(f"Shape of the depth image: {depth_image.shape}")
+
+        camera = CameraInfo(
+            width=self.image_width,
+            height=self.image_height,
+            fx=self.camera_matrix[0, 0],
+            fy=self.camera_matrix[1, 1],
+            cx=self.camera_matrix[0, 2],
+            cy=self.camera_matrix[1, 2],
+            scale=1000.0,
+        )
+
+        pcd = create_point_cloud_from_depth_image(
+            depth_image, camera, organized=False
+        )
+        pcd = self._resample_pointcloud(pcd, target_points=target_points)
+        self.get_logger().info(f"Shape of pcd: {pcd.shape}")
+
+        t = self.tf_buffer.lookup_transform(
+            "base_link",
+            "orbbec_femto_mega_link",
+            rclpy.time.Time(),
+            timeout=RclpyDuration(seconds=0.2)
+        )
+        self.get_logger().info(f"Transform:\n{t}")
+
+        pcd_base = transform_points(pcd, t.transform)
+        self.get_logger().info(f"Shape of pcd_base: {pcd_base.shape}")
+        return pcd_base
+
+    def _resample_pointcloud(self, pcd: np.ndarray, target_points: int = 40000) -> np.ndarray:
+        num_points = pcd.shape[0]
+        if num_points == target_points:
+            return pcd
+
+        replace = num_points < target_points
+        sampled_indices = np.random.choice(num_points, size=target_points, replace=replace)
+        return pcd[sampled_indices]
+
+    def run_inference_once(self, pcd_from_saver: np.ndarray) -> None:
+        pcd = torch.from_numpy(pcd_from_saver).float()
+
+        t = time.time()
+        pcd = pcd[(pcd[:, 0] > -1.0) & (pcd[:, 0] < 0.5)]
+        pcd = pcd[(pcd[:, 1] > -0.5) & (pcd[:, 1] < 0.5)]
+        pcd = pcd[(pcd[:, 2] > 0.09) & (pcd[:, 2] < 0.3)]  # 40000 & 240000 front high new 1 2 3
+
+        prediction = self.model.inference(
+            pcd.to("cuda"),
+            graspness_th=0.8,
+            grasp_height_th=5e-3,
+            vis=True,
+            integrate=False,
+            fused_pose=False,
+            interactive_vis=True,
+        )
+        self.get_logger().info(f"Inference time: {time.time() - t:.3f}s")
+
+        if prediction is None:
+            self.get_logger().info("No prediction returned.")
+            return
+
+        if isinstance(prediction, torch.Tensor):
+            prediction = prediction.numpy()
+        if getattr(prediction, "ndim", 0) == 3:
+            prediction = prediction[0]
+
+        quat = quaternion_from_matrix(prediction)
+        translation = translation_from_matrix(prediction)
+        self.get_logger().info(f"Predicted translation: {translation}, quaternion: {quat}")
+
+        msg = PoseStamped()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = "base_link"
+        msg.pose.position.x = float(translation[0])
+        msg.pose.position.y = float(translation[1])
+        msg.pose.position.z = float(translation[2])
+        msg.pose.orientation.x = float(quat[0])
+        msg.pose.orientation.y = float(quat[1])
+        msg.pose.orientation.z = float(quat[2])
+        msg.pose.orientation.w = float(quat[3])
+        self.pose_publisher.publish(msg)
+
+
 def main_module(
     args: argparse.Namespace,
     learning: bool = True,
@@ -375,8 +537,9 @@ def main_module(
     )
     # Clear GPU cache before loading checkpoint to avoid memory allocation errors
     torch.cuda.empty_cache()
-    main_module, ckpt_loaded = estimator.module_loader(args.ckpt)
-    main_module = main_module.to("cuda")
+    model, ckpt_loaded = estimator.module_loader(args.ckpt)
+    model = model.to("cuda")
+
     # pcd = torch.load(f"env_4_epi_142_step_0_data.pt", map_location="cpu")["camera_3"]["pcd"]/1e3
     # pcd = torch.load(f"vmf_input_pcd_base_1772028331_672243968.pt")  # 40000 high
     # pcd = torch.load(f"vmf_input_pcd_base_1772462174_661852928.pt") # 40000 front high
@@ -384,95 +547,25 @@ def main_module(
     # pcd = torch.load(f"vmf_input_pcd_base_1772636072_130245888.pt") # 40000 front high new 2 horizontal
     # pcd = torch.load(f"vmf_input_pcd_base_1772636177_373777920.pt") # 40000 front high new 3 vertical
     # pcd = torch.load(f"vmf_input_pcd_base_1773068076_380884992.pt") # 240000 front high new 3 vertical
-    pcd = torch.load(f"{directory_path}/../vmf_input_pcd_base_1773069670_198106112.pt") # 40000 front high new new 3 vertical
+    # pcd = torch.load(f"{directory_path}/../vmf_input_pcd_base_1773069670_198106112.pt") # 40000 front high new new 3 vertical
 
+    return model
 
-    # Initialize ROS 2 for publishing grasp poses
-    rclpy.init(args=None)
-    ros_pub_node = rclpy.create_node("vmf_inference_publisher")
-    pose_publisher = ros_pub_node.create_publisher(PoseStamped, "/arm_vmf/pose_chosen", 10)
+def main(args=None):
+    # current_file_folder = os.path.dirname(os.path.abspath(__file__))
+    # parsed_args = parse_args_from_yaml(current_file_folder + "/config.yaml")
+    parsed_args = parse_args_from_yaml(current_file_folder + "/config.yaml")
+    model = main_module(parsed_args)
 
-    # pcd = torch.load(f"vmf_input_pcd_base_1772719274_623702016.pt") # 40000 front low new 
-    # pcd_bounds=torch.tensor([[0.2, -0.5, -0.5], [1.2, 0.5, 0.5]], dtype=torch.float32) # ifl demo
-    # pcd_bounds=torch.tensor([[-0.5, -1.3, -0.6], [0.5, -0.3, 0.4]], dtype=torch.float32) # 40000 high right 
-    # pcd_bounds=torch.tensor([[-1.0, -0.5, -0.4], [0.0, -0.5, 0.6]], dtype=torch.float32) # 40000 front high new 1 2 3
-    # pcd_bounds=torch.tensor([[-1.0, -0.5, -0.5], [0.0, -0.5, 0.5]], dtype=torch.float32) # 40000 front low
-    
-    # pcd_shift = (pcd_bounds[0] + pcd_bounds[1]) / 2 
-    # pcd_resize = pcd_bounds[1] - pcd_bounds[0] 
-
-    # pcd = (pcd.view(-1, 3) - pcd_shift) / pcd_resize  # with bounds
-    # pcd = pcd.view(-1, 3) # without bounds
+    rclpy.init(args=args)
+    node = InferenceTest2(parsed_args, model)
     try:
-        while True:
-            t = time.time()
-            # preprocess pointcloud
-            # pcd = pcd[(pcd[:, 0] > -0.5) & (pcd[:, 0] < 0.5)]
-            # pcd = pcd[(pcd[:, 1] > -0.5) & (pcd[:, 1] < 0.5)]
-            # pcd = pcd[(pcd[:, 2] > -0.02)] # ifl demo
-
-            # pcd = pcd[(pcd[:, 0] > -0.2) & (pcd[:, 0] < 0.2)]
-            # pcd = pcd[(pcd[:, 1] > -0.2) & (pcd[:, 1] < 0.3)]
-            # pcd = pcd[(pcd[:, 2] > 0.065) & (pcd[:, 2] < 0.5)] # 40000 high right, with bounds
-
-            # pcd = pcd[(pcd[:, 0] > -1.5) & (pcd[:, 0] < 1.5)]
-            # pcd = pcd[(pcd[:, 1] > -0.5) & (pcd[:, 1] < 0.5)]
-            # pcd = pcd[(pcd[:, 2] > 0.09) & (pcd[:, 2] < 0.3)] # 40000 front high, without bounds
-
-            # pcd = pcd[(pcd[:, 0] > -1.5) & (pcd[:, 0] < 1.5)]
-            # pcd = pcd[(pcd[:, 1] > -0.5) & (pcd[:, 1] < 0.5)]
-            # pcd = pcd[(pcd[:, 2] > -0.01) & (pcd[:, 2] < 0.3)] # 40000 front high new 1 2 3, with bounds
-
-            pcd = pcd[(pcd[:, 0] > -1.0) & (pcd[:, 0] < 0.5)]
-            pcd = pcd[(pcd[:, 1] > -0.5) & (pcd[:, 1] < 0.5)]
-            pcd = pcd[(pcd[:, 2] > 0.09) & (pcd[:, 2] < 0.3)] # 40000 & 240000 front high new 1 2 3, without bounds
-
-            # pcd = pcd[(pcd[:, 0] > -1.5) & (pcd[:, 0] < 1.5)]
-            # pcd = pcd[(pcd[:, 1] > -0.5) & (pcd[:, 1] < 0.5)]
-            # pcd = pcd[(pcd[:, 2] > -0.05) & (pcd[:, 2] < 0.3)] # 40000 front low, without bounds
-            
-            # pcd = pcd[(pcd[:, 0] > -0.5) & (pcd[:, 0] < 0.5)]
-            # pcd = pcd[(pcd[:, 1] > -0.5) & (pcd[:, 1] < 0.5)]
-            # pcd = pcd[(pcd[:, 2] > -0.1) & (pcd[:, 2] < 0.3)] # 40000 front low, with bounds
-            prediction = main_module.inference(pcd.to("cuda"), 
-                                               graspness_th=0.8, 
-                                               grasp_height_th = 5e-3,
-                                               vis=True, 
-                                               integrate=False, 
-                                               fused_pose=False,
-                                               interactive_vis=True,)
-            print(time.time()-t)
-            print(prediction)
-
-            if prediction is None:
-                continue
-
-            
-            if isinstance(prediction, torch.Tensor):
-                prediction = prediction.numpy()
-            if getattr(prediction, "ndim", 0) == 3:
-                prediction = prediction[0]
-
-            quat = quaternion_from_matrix(prediction)
-            translation = translation_from_matrix(prediction)
-
-            msg = PoseStamped()
-            msg.header.stamp = ros_pub_node.get_clock().now().to_msg()
-            msg.header.frame_id = "base_link"
-            msg.pose.position.x = float(translation[0])
-            msg.pose.position.y = float(translation[1])
-            msg.pose.position.z = float(translation[2])
-            msg.pose.orientation.x = float(quat[0])
-            msg.pose.orientation.y = float(quat[1])
-            msg.pose.orientation.z = float(quat[2])
-            msg.pose.orientation.w = float(quat[3])
-            pose_publisher.publish(msg)
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
     finally:
-        ros_pub_node.destroy_node()
+        node.destroy_node()
         rclpy.shutdown()
 
 if __name__ == "__main__":
-    current_file_folder = os.path.dirname(os.path.abspath(__file__))
-    #args = get_args_parser(add_help=True).parse_args()
-    main_module(parse_args_from_yaml(current_file_folder + "/config.yaml"))
-    #main_module(args)
+    main()

@@ -93,8 +93,7 @@ class AIRNode(Node):
         self.stitched_pointcloud_topic = "/cloud_stitched"  
         self.grasp_result_topic = "/detect_grasps/clustered_grasps" 
 
-        # Set up a subscription to the 'pcd' topic with a callback to the
-        # function `listener_callback`
+        # Subscriptions used to update internal state via callbacks
         self.pcd_subscriber = self.create_subscription(
             sensor_msgs.PointCloud2,  # Msg type
             "/camera/depth/points",  # topic
@@ -146,10 +145,16 @@ class AIRNode(Node):
         self.tf_buffer = Buffer(cache_time)
         self.tf_listener = TransformListener(self.tf_buffer, self)
         
-        self.ts = message_filters.ApproximateTimeSynchronizer([self.pcd_subscriber, 
-                                                               self.img_subscriber, 
-                                                               self.dpt_subscriber,
-                                                               self.camera_info_subscriber], 10)
+        
+        # message_filters expects message_filters.Subscriber, not rclpy Subscription.
+        self.pcd_filter_sub = message_filters.Subscriber(self, sensor_msgs.PointCloud2, "/camera/depth/points")
+        self.img_filter_sub = message_filters.Subscriber(self, sensor_msgs.Image, "/camera/color/image_raw")
+        self.dpt_filter_sub = message_filters.Subscriber(self, sensor_msgs.Image, "/camera/depth/image_raw")
+        self.caminfo_filter_sub = message_filters.Subscriber(self, sensor_msgs.CameraInfo, "/camera/color/camera_info")
+
+        self.ts = message_filters.ApproximateTimeSynchronizer(
+            [self.pcd_filter_sub, self.img_filter_sub, self.dpt_filter_sub, self.caminfo_filter_sub], 10, 0.1
+        )
         self.ts.registerCallback(self.process_point_cloud_and_rgbd_node)
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -172,7 +177,7 @@ class AIRNode(Node):
         # self.camera_ready_pose = list_to_pose_stamped([-0.435, -0.572, 1.492, 0.995, 0.009, 0.005, 0.100], "world") # small finger
         self.drop_off_pose: PoseStamped = list_to_pose_stamped([0.15, -0.75, 1.4, 1.0, 0.0, 0.0, 0.0], "world")
 
-        self.langsam_model = LangSAM(sam_type="sam2.1_hiera_large") if use_langsam and len(obj_list) else None
+        # self.langsam_model = LangSAM(sam_type="sam2.1_hiera_large") if use_langsam and len(obj_list) else None
         self.input_ready = False
 
     
@@ -327,12 +332,12 @@ class AIRNode(Node):
             # print("depth_msg_stamp: ", stamp)
             # print("transform_msg_stamp: ", t_robot_2_camera.header.stamp)
     
-    def record_videos(self):
-        # start recording
-        record_orbbec_video(self, "color")
-        record_orbbec_video(self, "depth")
-        self.realsense_thread = threading.Thread(target=record_realsense_video)
-        self.realsense_thread.start()
+    # def record_videos(self):
+    #     # start recording
+    #     record_orbbec_video(self, "color")
+    #     record_orbbec_video(self, "depth")
+    #     self.realsense_thread = threading.Thread(target=record_realsense_video)
+    #     self.realsense_thread.start()
 
     def process_point_cloud_and_rgbd(self, save_data=False, pcd_only=False):
         # TODO: add rgb image processing
@@ -1030,6 +1035,4 @@ class AIRNode(Node):
                 tcp_pose_to_world, _ = self.camera_robot_pose_to_tcp_world_pose(cam_pose_to_robot)
                 path.append(tcp_pose_to_world)
             return path
-
-
 

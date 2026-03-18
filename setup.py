@@ -27,7 +27,7 @@ setup(
             "data = ros2_nodes.inference_node_data:main",
             "visualization = ros2_nodes.test_visualization_node:main",
             "frame_saver = ros2_nodes.test_frame_saver:main",
-            "test_pub = vmf_contact_main.test_1_pub:main_module",
+            "test_pub = vmf_contact_main.test_2_sub:main",
         ],
     },
 )
