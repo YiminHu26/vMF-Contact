@@ -15,7 +15,9 @@ import numpy as np
 if not hasattr(np, "float"):
     np.float = float  # type: ignore[attr-defined]
     
-from tf_transformations import quaternion_from_matrix, translation_from_matrix
+from tf_transformations import quaternion_from_matrix, translation_from_matrix, quaternion_matrix
+
+from ament_index_python.packages import get_package_share_directory, PackageNotFoundError
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(os.path.join(current_dir, '.'))
@@ -421,16 +423,72 @@ class InferenceTest2(AIRNode):
         sampled_indices = np.random.choice(num_points, size=target_points, replace=replace)
         return pcd[sampled_indices]
 
+
+    def _lineset_between_points(self, a: np.ndarray, b: np.ndarray, color: np.ndarray) -> o3d.geometry.LineSet:
+        line = o3d.geometry.LineSet()
+        line.points = o3d.utility.Vector3dVector([a, b])
+        line.lines = o3d.utility.Vector2iVector([[0, 1]])
+        line.colors = o3d.utility.Vector3dVector(np.tile(color, (1, 1)))
+        return line
+
+    def _visualize_pose_and_pcd(self, pcd_np: np.ndarray, pose_msg: PoseStamped, axis_length: float = 0.05) -> None:
+        pcd_vis = o3d.geometry.PointCloud()
+        pcd_vis.points = o3d.utility.Vector3dVector(pcd_np)
+
+        pos = np.array(
+            [
+                pose_msg.pose.position.x,
+                pose_msg.pose.position.y,
+                pose_msg.pose.position.z,
+            ],
+            dtype=np.float32,
+        )
+        quat = np.array(
+            [
+                pose_msg.pose.orientation.x,
+                pose_msg.pose.orientation.y,
+                pose_msg.pose.orientation.z,
+                pose_msg.pose.orientation.w,
+            ],
+            dtype=np.float32,
+        )
+        rot = quaternion_matrix(quat)[:3, :3]
+
+        vis_list = [pcd_vis]
+        vis_list.append(self._lineset_between_points(pos, pos + rot[:, 0] * axis_length, np.array([1.0, 0.0, 0.0])))
+        vis_list.append(self._lineset_between_points(pos, pos + rot[:, 1] * axis_length, np.array([0.0, 1.0, 0.0])))
+        vis_list.append(self._lineset_between_points(pos, pos + rot[:, 2] * axis_length, np.array([0.0, 0.0, 1.0])))
+
+        o3d.visualization.draw_geometries(vis_list)
+
+
     def run_inference_once(self, pcd_from_saver: np.ndarray) -> None:
+        
+        # The point cloud pcd_from_saver is already in base_link frame and has shape (N, 3)
         pcd = torch.from_numpy(pcd_from_saver).float()
 
         t = time.time()
-        pcd = pcd[(pcd[:, 0] > -1.0) & (pcd[:, 0] < 0.5)]
+
+        # Shift and scale the point cloud, so that the center of the region of interest is at the agv_table_link ([-0.45, 0, 0.101] in base_link)
+        # and the whole area fits in a unit cube. This can help with model generalization and convergence.
+        pcd_bounds=torch.tensor([[-0.95, -0.5, -0.399], [0.05, 0.5, 0.601]], dtype=torch.float32) # 40000 front high new 1 2 3
+        pcd_shift = (pcd_bounds[0] + pcd_bounds[1]) / 2 
+        pcd_resize = pcd_bounds[1] - pcd_bounds[0] 
+
+        pcd = (pcd.view(-1, 3) - pcd_shift) / pcd_resize  # with bounds
+
+        # pcd = pcd[(pcd[:, 0] > -1.0) & (pcd[:, 0] < 0.5)]
+        # pcd = pcd[(pcd[:, 1] > -0.5) & (pcd[:, 1] < 0.5)]
+        # pcd = pcd[(pcd[:, 2] > 0.09) & (pcd[:, 2] < 0.3)]  # 40000 & 240000 front high new 1 2 3
+
+        pcd = pcd[(pcd[:, 0] > -0.4) & (pcd[:, 0] < 0.5)]
         pcd = pcd[(pcd[:, 1] > -0.5) & (pcd[:, 1] < 0.5)]
-        pcd = pcd[(pcd[:, 2] > 0.09) & (pcd[:, 2] < 0.3)]  # 40000 & 240000 front high new 1 2 3
-        
-        grasp_z_offset = 0.1
-        
+        pcd = pcd[(pcd[:, 2] > 0.0) & (pcd[:, 2] < 0.3)] 
+
+        grasp_x_offset = -0.45
+        grasp_y_offset = 0.0
+        grasp_z_offset = 0.101
+
         prediction = self.model.inference(
             pcd.to("cuda"),
             graspness_th=0.8,
@@ -453,8 +511,12 @@ class InferenceTest2(AIRNode):
 
         quat = quaternion_from_matrix(prediction)
         translation = translation_from_matrix(prediction)
+        translation[0] += grasp_x_offset
+        translation[1] += grasp_y_offset
         translation[2] += grasp_z_offset
+        
         self.get_logger().info(f"Predicted translation: {translation}, quaternion: {quat}")
+
         msg = PoseStamped()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = "base_link"
@@ -466,6 +528,7 @@ class InferenceTest2(AIRNode):
         msg.pose.orientation.z = float(quat[2])
         msg.pose.orientation.w = float(quat[3])
         self.pose_publisher.publish(msg)
+        self._visualize_pose_and_pcd(pcd.detach().cpu().numpy(), msg)
 
 
 def main_module(
@@ -557,6 +620,14 @@ def main(args=None):
     current_file_folder = os.path.dirname(os.path.abspath(__file__))
     parsed_args = parse_args_from_yaml(current_file_folder + "/config.yaml")
     model = main_module(parsed_args)
+    # try:
+    #     package_dir = get_package_share_directory("robot_grasping")
+    #     config_file_dir = os.path.join(package_dir, "vmf_contact_main", "config.yaml")
+    #     parsed_args = parse_args_from_yaml(config_file_dir)
+    # except PackageNotFoundError:
+    #     print("Package 'robot_grasping' not found. Using default config path.")
+    #     parsed_args = parse_args_from_yaml(current_file_folder + "/config.yaml")
+    # model = main_module(parsed_args)
 
     rclpy.init(args=args)
     node = InferenceTest2(parsed_args, model)
