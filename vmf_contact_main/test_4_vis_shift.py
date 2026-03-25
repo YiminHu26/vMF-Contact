@@ -488,7 +488,7 @@ class InferenceTest2(AIRNode):
         # pcd = pcd[(pcd[:, 1] > -0.5) & (pcd[:, 1] < 0.5)]
         # pcd = pcd[(pcd[:, 2] > 0.09) & (pcd[:, 2] < 0.3)]  # 40000 & 240000 front high new 1 2 3
 
-        pcd = pcd[(pcd[:, 0] > -0.4) & (pcd[:, 0] < 0.5)]
+        pcd = pcd[(pcd[:, 0] > -0.1) & (pcd[:, 0] < 0.5)]
         pcd = pcd[(pcd[:, 1] > -0.5) & (pcd[:, 1] < 0.5)]
         pcd = pcd[(pcd[:, 2] > 0.0) & (pcd[:, 2] < 0.3)] 
 
@@ -498,8 +498,8 @@ class InferenceTest2(AIRNode):
 
         prediction = self.model.inference(
             pcd.to("cuda"),
-            graspness_th=0.8,
-            grasp_height_th=5e-3,
+            graspness_th=0.7,
+            grasp_height_th=0.025,
             vis=True,
             integrate=False,
             fused_pose=False,
