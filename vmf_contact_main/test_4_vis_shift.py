@@ -435,11 +435,15 @@ class InferenceTest2(AIRNode):
         pcd_vis = o3d.geometry.PointCloud()
         pcd_vis.points = o3d.utility.Vector3dVector(pcd_np)
 
+        grasp_x_offset = -0.45
+        grasp_y_offset = 0.0
+        grasp_z_offset = 0.101
+
         pos = np.array(
             [
-                pose_msg.pose.position.x,
-                pose_msg.pose.position.y,
-                pose_msg.pose.position.z,
+                pose_msg.pose.position.x - grasp_x_offset,
+                pose_msg.pose.position.y - grasp_y_offset,
+                pose_msg.pose.position.z - grasp_z_offset,
             ],
             dtype=np.float32,
         )
@@ -458,6 +462,9 @@ class InferenceTest2(AIRNode):
         vis_list.append(self._lineset_between_points(pos, pos + rot[:, 0] * axis_length, np.array([1.0, 0.0, 0.0])))
         vis_list.append(self._lineset_between_points(pos, pos + rot[:, 1] * axis_length, np.array([0.0, 1.0, 0.0])))
         vis_list.append(self._lineset_between_points(pos, pos + rot[:, 2] * axis_length, np.array([0.0, 0.0, 1.0])))
+
+        axis = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1, origin=[0, 0, 0])
+        vis_list.append(axis)
 
         o3d.visualization.draw_geometries(vis_list)
 
