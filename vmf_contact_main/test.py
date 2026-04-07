@@ -29,6 +29,13 @@ from openpoints.utils import EasyConfig
 import glob
 import warnings
 
+import numpy as np
+# Compatibility shim for deps that still reference np.float (removed in NumPy 1.24).
+if not hasattr(np, "float"):
+    np.float = float  # type: ignore[attr-defined]
+    
+from tf_transformations import quaternion_from_matrix, translation_from_matrix, quaternion_matrix
+
 def suppress_pytorch_lightning_logs():
     """
     Suppresses annoying PyTorch Lightning logs.
@@ -376,18 +383,26 @@ def main_module(
     # pcd = torch.load(f"vmf_input_pcd_base_1772636072_130245888.pt") # 40000 front high new 2 horizontal
     # pcd = torch.load(f"vmf_input_pcd_base_1772636177_373777920.pt") # 40000 front high new 3 vertical
     # pcd = torch.load(f"vmf_input_pcd_base_1773068076_380884992.pt") # 240000 front high new 3 vertical
-    pcd = torch.load(f"vmf_input_pcd_base_1773069670_198106112.pt") # 40000 front high new new 3 vertical
-
+    # pcd = torch.load(f"vmf_input_pcd_base_1773069670_198106112.pt") # 40000 front high new new 3 vertical
     # pcd = torch.load(f"vmf_input_pcd_base_1772719274_623702016.pt") # 40000 front low new 
+
+    # pcd = torch.load(f="vmf_input_pcd_base_1775134583_411764992.pt") # 40000 front distant high 2026402 1: rotated
+    # pcd = torch.load(f="vmf_input_pcd_base_1775135733_593223936.pt") # 40000 front distant high 2026402 2: horizontal
+    # pcd = torch.load(f="vmf_input_pcd_base_1775135987_676135936.pt") # 40000 front distant high 2026402 3: vertical
+    # pcd = torch.load(f="vmf_input_pcd_base_1775136907_450576896.pt") # 40000 front distant high 2026402 4: vertical pose2
+    pcd = torch.load(f="vmf_input_pcd_base_1775136991_594053120.pt") # 40000 front distant high 2026402 5: rotated pose2
+
+    
     # pcd_bounds=torch.tensor([[0.2, -0.5, -0.5], [1.2, 0.5, 0.5]], dtype=torch.float32) # ifl demo
     # pcd_bounds=torch.tensor([[-0.5, -1.3, -0.6], [0.5, -0.3, 0.4]], dtype=torch.float32) # 40000 high right 
     # pcd_bounds=torch.tensor([[-1.0, -0.5, -0.4], [0.0, -0.5, 0.6]], dtype=torch.float32) # 40000 front high new 1 2 3
     # pcd_bounds=torch.tensor([[-1.0, -0.5, -0.5], [0.0, -0.5, 0.5]], dtype=torch.float32) # 40000 front low
+    pcd_bounds=torch.tensor([[-1.2, -0.5, -0.399], [-0.2, 0.5, 0.601]], dtype=torch.float32) # 40000 front distant high 20260402
     
-    # pcd_shift = (pcd_bounds[0] + pcd_bounds[1]) / 2 
-    # pcd_resize = pcd_bounds[1] - pcd_bounds[0] 
+    pcd_shift = (pcd_bounds[0] + pcd_bounds[1]) / 2 
+    pcd_resize = pcd_bounds[1] - pcd_bounds[0] 
 
-    # pcd = (pcd.view(-1, 3) - pcd_shift) / pcd_resize  # with bounds
+    pcd = (pcd.view(-1, 3) - pcd_shift) / pcd_resize  # with bounds
     # pcd = pcd.view(-1, 3) # without bounds
     while True:
         t = time.time()
@@ -408,9 +423,9 @@ def main_module(
         # pcd = pcd[(pcd[:, 1] > -0.5) & (pcd[:, 1] < 0.5)]
         # pcd = pcd[(pcd[:, 2] > -0.01) & (pcd[:, 2] < 0.3)] # 40000 front high new 1 2 3, with bounds
 
-        pcd = pcd[(pcd[:, 0] > -1.0) & (pcd[:, 0] < 0.5)]
-        pcd = pcd[(pcd[:, 1] > -0.5) & (pcd[:, 1] < 0.5)]
-        pcd = pcd[(pcd[:, 2] > 0.09) & (pcd[:, 2] < 0.3)] # 40000 & 240000 front high new 1 2 3, without bounds
+        # pcd = pcd[(pcd[:, 0] > -1.0) & (pcd[:, 0] < 0.5)]
+        # pcd = pcd[(pcd[:, 1] > -0.5) & (pcd[:, 1] < 0.5)]
+        # pcd = pcd[(pcd[:, 2] > 0.09) & (pcd[:, 2] < 0.3)] # 40000 & 240000 front high new 1 2 3, without bounds
 
         # pcd = pcd[(pcd[:, 0] > -1.5) & (pcd[:, 0] < 1.5)]
         # pcd = pcd[(pcd[:, 1] > -0.5) & (pcd[:, 1] < 0.5)]
@@ -419,15 +434,33 @@ def main_module(
         # pcd = pcd[(pcd[:, 0] > -0.5) & (pcd[:, 0] < 0.5)]
         # pcd = pcd[(pcd[:, 1] > -0.5) & (pcd[:, 1] < 0.5)]
         # pcd = pcd[(pcd[:, 2] > -0.1) & (pcd[:, 2] < 0.3)] # 40000 front low, with bounds
+
+        pcd = pcd[(pcd[:, 0] > -0.15) & (pcd[:, 0] < 0.5)]
+        pcd = pcd[(pcd[:, 1] > -0.2) & (pcd[:, 1] < 0.25)]
+        pcd = pcd[(pcd[:, 2] > 0.0) & (pcd[:, 2] < 0.3)] # 40000 front distant high 20260402, with bounds
         prediction = main_module.inference(pcd.to("cuda"), 
-                                           graspness_th=0.8, 
-                                           grasp_height_th = 5e-3,
+                                           graspness_th=0.7, 
+                                           grasp_height_th = 0.025,
                                            vis=True, 
                                            integrate=False, 
                                            fused_pose=False,
                                            interactive_vis=True,)
         print(time.time()-t)
         print(prediction)
+
+
+        grasp_x_offset = -0.70
+        grasp_y_offset = 0.0
+        grasp_z_offset = 0.101
+
+        quat = quaternion_from_matrix(prediction)
+        translation = translation_from_matrix(prediction)
+        translation[0] += grasp_x_offset
+        translation[1] += grasp_y_offset
+        translation[2] += grasp_z_offset
+        
+        print(f"Predicted translation: {translation}, quaternion: {quat}")
+
 
 if __name__ == "__main__":
     current_file_folder = os.path.dirname(os.path.abspath(__file__))
