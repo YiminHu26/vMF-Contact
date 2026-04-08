@@ -478,7 +478,10 @@ class InferenceTest2(AIRNode):
 
         # Shift and scale the point cloud, so that the center of the region of interest is at the agv_table_link ([-0.45, 0, 0.101] in base_link)
         # and the whole area fits in a unit cube. This can help with model generalization and convergence.
-        pcd_bounds=torch.tensor([[-0.95, -0.5, -0.399], [0.05, 0.5, 0.601]], dtype=torch.float32) # 40000 front high new 1 2 3
+        # pcd_bounds=torch.tensor([[-0.95, -0.5, -0.399], [0.05, 0.5, 0.601]], dtype=torch.float32) # 40000 front high new 1 2 3
+        
+        # agv_table_center_link [-0.7, 0, 0.101] in base_link
+        pcd_bounds = torch.tensor([[-1.2, -0.5, -0.399], [-0.2, 0.5, 0.601]], dtype=torch.float32)  # 40000 front distant high 20260402
         pcd_shift = (pcd_bounds[0] + pcd_bounds[1]) / 2 
         pcd_resize = pcd_bounds[1] - pcd_bounds[0] 
 
@@ -489,8 +492,8 @@ class InferenceTest2(AIRNode):
         # pcd = pcd[(pcd[:, 2] > 0.09) & (pcd[:, 2] < 0.3)]  # 40000 & 240000 front high new 1 2 3
 
         pcd = pcd[(pcd[:, 0] > -0.15) & (pcd[:, 0] < 0.5)]
-        pcd = pcd[(pcd[:, 1] > -0.5) & (pcd[:, 1] < 0.5)]
-        pcd = pcd[(pcd[:, 2] > 0.0) & (pcd[:, 2] < 0.3)]
+        pcd = pcd[(pcd[:, 1] > -0.2) & (pcd[:, 1] < 0.3)]
+        pcd = pcd[(pcd[:, 2] > 0.0) & (pcd[:, 2] < 0.3)] # 40000 front distant high 20260402
 
         grasp_x_offset = -0.70
         grasp_y_offset = 0.0

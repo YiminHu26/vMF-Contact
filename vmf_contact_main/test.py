@@ -436,7 +436,7 @@ def main_module(
         # pcd = pcd[(pcd[:, 2] > -0.1) & (pcd[:, 2] < 0.3)] # 40000 front low, with bounds
 
         pcd = pcd[(pcd[:, 0] > -0.15) & (pcd[:, 0] < 0.5)]
-        pcd = pcd[(pcd[:, 1] > -0.2) & (pcd[:, 1] < 0.25)]
+        pcd = pcd[(pcd[:, 1] > -0.2) & (pcd[:, 1] < 0.3)]
         pcd = pcd[(pcd[:, 2] > 0.0) & (pcd[:, 2] < 0.3)] # 40000 front distant high 20260402, with bounds
         prediction = main_module.inference(pcd.to("cuda"), 
                                            graspness_th=0.7, 
