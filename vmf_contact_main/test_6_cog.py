@@ -494,10 +494,14 @@ class InferenceTest2(AIRNode):
         pcd = pcd[(pcd[:, 0] > -0.15) & (pcd[:, 0] < 0.5)]
         pcd = pcd[(pcd[:, 1] > -0.2) & (pcd[:, 1] < 0.3)]
         pcd = pcd[(pcd[:, 2] > 0.0) & (pcd[:, 2] < 0.3)] # 40000 front distant high 20260402
+        if pcd.numel() == 0:
+            self.get_logger().warning("Filtered point cloud is empty; skipping inference.")
+            return
+        pcd_np = pcd.detach().cpu().numpy()
 
         # ==========================================================================
         # Calculate the point cloud and its bounding box in open3d
-        obb = o3d.geometry.OrientedBoundingBox.create_from_points(o3d.utility.Vector3dVector(pcd.detach().cpu().numpy()), robust = False)
+        obb = o3d.geometry.OrientedBoundingBox.create_from_points(o3d.utility.Vector3dVector(pcd_np), robust = False)
         obb.color = (1, 0, 0)
 
         obb_pose_center = np.asarray(obb.center)   # in agv_table_center_link 
@@ -514,7 +518,7 @@ class InferenceTest2(AIRNode):
         # obb_marker.translate(obb_pose_center)
 
         # Center of gravity (centroid) of the point cloud (which may have some density bias)
-        cog_pcd = np.mean(np.asarray(pcd.points), axis=0)
+        cog_pcd = np.mean(pcd_np, axis=0)
         print(f"Point-cloud center of gravity: {cog_pcd}")
 
         # # Visual marker for center of gravity
@@ -549,6 +553,7 @@ class InferenceTest2(AIRNode):
             fused_pose=False,
             interactive_vis=True,
             cog=cog_mean,
+            obb=obb,
         )
         self.get_logger().info(f"Inference time: {time.time() - t:.3f}s")
 

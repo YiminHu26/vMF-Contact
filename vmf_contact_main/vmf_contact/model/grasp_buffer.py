@@ -74,7 +74,7 @@ class GraspBuffer:
         self.vis.update_renderer()
         self.set_view()
 
-    def vis_grasps(self, pcd_shift=None, interactive_vis=True, fused_pose=False, amplify_kappa=False):
+    def vis_grasps(self, pcd_shift=None, interactive_vis=True, fused_pose=False, amplify_kappa=False, cog = None, obb = None):
 
         if len(self.buffer_dict["pcds"]) == 0:
             print("Buffer is empty, no grasp to visualize")
@@ -89,8 +89,8 @@ class GraspBuffer:
         cp2 = cp + grasp_width * baseline
 
         if amplify_kappa:
-            kappa *= 80       
-        
+            kappa *= 80   
+
         vis_list = vis_grasps(
                     samples=pcd,
                     cp=cp,
@@ -99,6 +99,26 @@ class GraspBuffer:
                     approach=approach,
                     score = graspness,
                 )
+        
+        if cog is not None:
+            cog_marker = o3d.geometry.TriangleMesh.create_sphere(radius=0.01)
+            cog_marker.paint_uniform_color((0.0, 0.0, 0.0))  # BLACK
+            cog_marker.translate(cog)
+            vis_list.append(cog_marker)   
+        else:
+            cog_marker = None
+            print("No COG provided for visualization") 
+        
+        if obb is not None:
+            obb_vis = copy.deepcopy(obb)
+            obb_vis.color = (1.0, 0.0, 0.0)  # RED
+            vis_list.append(obb_vis)
+        
+        else:
+            obb_vis = None
+            print("No OBB provided for visualization")
+                
+        
         if not hasattr(self, "vis") and pcd_shift is not None:
             self.create_vis()
             self.view_center = pcd_shift
