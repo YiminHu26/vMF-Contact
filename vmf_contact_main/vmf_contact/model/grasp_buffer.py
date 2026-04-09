@@ -114,10 +114,13 @@ class GraspBuffer:
                     resize=1.0, 
                     graspness_th = 0.0,
                     grasp_height_th = -0.2, 
+                    grasp_cog_dist_th = None,
                     pcd_from_prompt=None,
                     prob_baseline="likelihood",
                     uncertainty_estimator=None,
-                    integrate=False):
+                    integrate=False,
+                    cog=None,
+                    ):
         predictions = {}
         predictions["contact_point"] = out["contact_point"].squeeze(0)
         baseline_params = out["baseline"]
@@ -160,8 +163,10 @@ class GraspBuffer:
                                 # threshold for filtering out invalid grasps
                                 grasp_height_th = grasp_height_th, 
                                 graspness_th = graspness_th, 
+                                grasp_cog_dist_th = grasp_cog_dist_th,
                                 pcd_from_prompt = pcd_from_prompt,
-                                integrate = integrate
+                                integrate = integrate,
+                                cog = cog,
                                 )
         return valid_grasp
 
@@ -173,8 +178,11 @@ class GraspBuffer:
                grasp_height_th=-.2, 
                grasp_width_th=0.2, 
                graspness_th=0.0, 
+               grasp_cog_dist_th=None,
                pcd_from_prompt=None,
-               integrate=False):     
+               integrate=False,
+               cog=None,
+               ):     
         
         if not isinstance(pcd_shift, torch.Tensor):
             pcd_shift = torch.tensor(pcd_shift, device=pcds.device, dtype=torch.float32)
@@ -195,6 +203,16 @@ class GraspBuffer:
                     (cp[..., -1] > grasp_height_th) & \
                     (cp2[..., -1] > grasp_height_th)
         filter = filter.squeeze(-1)
+
+        if cog is not None and grasp_cog_dist_th is not None:
+            if not isinstance(cog, torch.Tensor):
+                cog = torch.tensor(cog, device=cp.device, dtype=cp.dtype)
+            else:
+                cog = cog.to(device=cp.device, dtype=cp.dtype)
+
+            midpoint = 0.5 * (cp + cp2)
+            midpoint_to_cog_dist = torch.linalg.norm(midpoint - cog, dim=-1)
+            filter = filter & (midpoint_to_cog_dist < grasp_cog_dist_th)
 
         if pcd_from_prompt is not None:
             filter = filter & self.filter_grasps_by_pcd(cp, pcd_from_prompt)

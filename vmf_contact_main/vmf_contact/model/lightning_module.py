@@ -501,12 +501,14 @@ class vmfContactLightningModule(pl.LightningModule):
         sample_num=1,
         graspness_th=0.0,
         grasp_height_th=-0.2,
+        grasp_cog_dist_th=None,
         pcd_from_prompt=None,
         convention="xzy",
         vis=False,
         interactive_vis=False,
         fused_pose=True,
-        integrate = True
+        integrate = True,
+        cog = None,
         ):
         if len(pcd) == 0:
             # print("No valid point cloud, skipping inference")
@@ -530,11 +532,14 @@ class vmfContactLightningModule(pl.LightningModule):
                                                     resize=resize,
                                                     graspness_th=graspness_th,
                                                     grasp_height_th=grasp_height_th,
+                                                    grasp_cog_dist_th=grasp_cog_dist_th,
                                                     pcd_from_prompt=pcd_from_prompt,
                                                     uncertainty_estimator=self.uncertainty_estimator,
-                                                    integrate = integrate
+                                                    integrate = integrate,
+                                                    cog = cog,
                                                     )
         
+
         if not valid_grasp:
             # print("No valid grasp")
             return None
