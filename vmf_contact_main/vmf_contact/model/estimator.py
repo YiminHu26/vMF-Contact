@@ -153,6 +153,48 @@ class vmfContactModule():
         out = self.trainer().test(module, data, verbose=False)
         return {k.split("/")[1]: v for k, v in out[0].items()}
 
+    def inference(
+        self,
+        pcd,
+        pcd_num=20000,
+        pcd_shift=0.0,
+        resize=1.0,
+        sample_num=1,
+        graspness_th=0.0,
+        grasp_height_th=-0.2,
+        grasp_cog_dist_th=None,
+        pcd_from_prompt=None,
+        convention="xzy",
+        vis=False,
+        interactive_vis=False,
+        fused_pose=True,
+        integrate=True,
+        cog=None,
+    ):
+        """
+        Runs grasp inference through the loaded Lightning module.
+        """
+        if not hasattr(self, "model_"):
+            raise RuntimeError("Estimator model is not loaded. Call module_loader()/fit() first.")
+
+        return self.model_.inference(
+            pcd,
+            pcd_num=pcd_num,
+            pcd_shift=pcd_shift,
+            resize=resize,
+            sample_num=sample_num,
+            graspness_th=graspness_th,
+            grasp_height_th=grasp_height_th,
+            grasp_cog_dist_th=grasp_cog_dist_th,
+            pcd_from_prompt=pcd_from_prompt,
+            convention=convention,
+            vis=vis,
+            interactive_vis=interactive_vis,
+            fused_pose=fused_pose,
+            integrate=integrate,
+            cog=cog,
+        )
+
     # ---------------------------------------------------------------------------------------------
     # PERSISTENCE
 
