@@ -403,7 +403,7 @@ class InferenceTest2(AIRNode):
         super().__init__()
         self.args = args
         self.model = model
-        self.grasp_pose_publisher = self.create_publisher(PoseStamped, "/arm_vmf/grasp_pose", 10)
+        self.grasp_pose_publisher = self.create_publisher(PoseStamped, "/arm_vmf/pose_chosen", 10)
         self.place_pose_publisher = self.create_publisher(PoseStamped, "/arm_vmf/place_pose", 10)
         self.inference_done = False
         self._tf_wait_logged = False
