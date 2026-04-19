@@ -701,9 +701,16 @@ class InferenceTest2(AIRNode):
         cog_T_grasp = cog_T_agv @ agv_T_grasp
         print(f"cog_T_grasp:\n{cog_T_grasp}")
 
+        # agv_T_placement_center = self.tf_buffer.lookup_transform(
+        #     "placement_link",
+        #     "agv_table_center_link",
+        #     rclpy.time.Time(),
+        #     timeout=RclpyDuration(seconds=0.2)
+        # )
+
         agv_T_placement_center = self.tf_buffer.lookup_transform(
-            "placement_link",
             "agv_table_center_link",
+            "placement_link",
             rclpy.time.Time(),
             timeout=RclpyDuration(seconds=0.2)
         )
