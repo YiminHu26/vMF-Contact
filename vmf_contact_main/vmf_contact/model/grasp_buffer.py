@@ -427,7 +427,7 @@ class GraspBuffer:
         baselines = torch.cat(self.buffer_dict["baselines"], dim=0)
         approaches = torch.cat(self.buffer_dict["approaches"], dim=0)
         cp = torch.cat(self.buffer_dict["cp"], dim=0)
-        grasp_width = torch.cat(self.buffer_dict[grasp_width], dim=0)
+        grasp_width = torch.cat(self.buffer_dict["grasp_width"], dim=0)
         kappa = torch.cat(self.buffer_dict["kappa"], dim=0)
         graspness = torch.cat(self.buffer_dict["graspness"], dim=0)
         return baselines, approaches, cp, grasp_width, kappa, graspness

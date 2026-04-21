@@ -661,6 +661,14 @@ class InferenceTest2(AIRNode):
 
         if prediction is None:
             self.get_logger().info("No prediction returned.")
+            # ==========================================
+            pcd_vis_test = o3d.geometry.PointCloud()
+            pcd_vis_test.points = o3d.utility.Vector3dVector(pcd_np)
+
+            # Create a coordinate frame for better orientation in the visualization
+            axis_test = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1, origin=[0, 0, 0])
+            o3d.visualization.draw_geometries([pcd_vis_test, axis_test, obb, cog_mean_marker, cog_axis, obb_pose])  
+            # ===============================================
             return
 
         if isinstance(prediction, torch.Tensor):
