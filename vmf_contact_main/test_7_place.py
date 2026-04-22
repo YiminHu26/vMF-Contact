@@ -201,6 +201,7 @@ def get_args_parser(
         type=int,
         help="Length of an epoch in number of iterations",
     )
+    
     parser.add_argument(
         "--learning-rates",
         nargs="+",
@@ -575,7 +576,7 @@ class InferenceTest2(AIRNode):
 
         pcd = pcd[(pcd[:, 0] > -0.15) & (pcd[:, 0] < 0.5)]
         pcd = pcd[(pcd[:, 1] > -0.3) & (pcd[:, 1] < 0.3)]
-        pcd = pcd[(pcd[:, 2] > 0.03) & (pcd[:, 2] < 0.3)] # 40000 front distant high foam 20260409
+        pcd = pcd[(pcd[:, 2] > 0.01) & (pcd[:, 2] < 0.3)] # 40000 front distant high foam 20260409
 
         pcd_np = pcd.detach().cpu().numpy()
         if pcd_np.shape[0] < 4:
@@ -583,13 +584,13 @@ class InferenceTest2(AIRNode):
                 f"Not enough cropped points for OBB computation: {pcd_np.shape[0]}"
             )
 
-        pcd_np, _ = denoise_point_cloud(
-            pcd_np,
-            nb_neighbors=30,
-            std_ratio=1.0,
-            radius=0.03,
-            min_points=12,
-        )
+        # pcd_np, _ = denoise_point_cloud(
+        #     pcd_np,
+        #     nb_neighbors=30,
+        #     std_ratio=1.0,
+        #     radius=0.03,
+        #     min_points=12,
+        # )
         if pcd_np.shape[0] < 4:
             raise RuntimeError(
                 f"Not enough denoised points for OBB computation: {pcd_np.shape[0]}"
@@ -648,7 +649,7 @@ class InferenceTest2(AIRNode):
 
         prediction = self.model.inference(
             pcd.to("cuda"),
-            graspness_th=0.7,
+            graspness_th=0.6,
             grasp_height_th=0.025,
             grasp_cog_dist_th=0.05,
             vis=True,
@@ -664,9 +665,16 @@ class InferenceTest2(AIRNode):
             return
 
         if isinstance(prediction, torch.Tensor):
-            prediction = prediction.numpy()
-        if getattr(prediction, "ndim", 0) == 3:
+            prediction = prediction.detach().cpu().numpy()
+        prediction = np.asarray(prediction)
+        if prediction.ndim == 3 and prediction.shape[0] == 1:
             prediction = prediction[0]
+        if prediction.shape == (3, 4):
+            prediction = np.vstack((prediction, np.array([0.0, 0.0, 0.0, 1.0], dtype=prediction.dtype)))
+        if prediction.shape != (4, 4):
+            raise RuntimeError(
+                f"Model inference returned invalid pose matrix shape {prediction.shape}, expected (4, 4)."
+            )
 
         grasp_quat = quaternion_from_matrix(prediction)
         grasp_translation = translation_from_matrix(prediction)
@@ -687,6 +695,7 @@ class InferenceTest2(AIRNode):
         grasp_msg.pose.orientation.z = float(grasp_quat[2])
         grasp_msg.pose.orientation.w = float(grasp_quat[3])
         self.grasp_pose_publisher.publish(grasp_msg)
+        self.get_logger().info("Grasp pose published.")
         self._visualize_pose_and_pcd(pcd_np, grasp_msg)
 
         agv_T_cog = np.eye(4)
@@ -701,12 +710,15 @@ class InferenceTest2(AIRNode):
         cog_T_grasp = cog_T_agv @ agv_T_grasp
         print(f"cog_T_grasp:\n{cog_T_grasp}")
 
-        agv_T_placement_center = self.tf_buffer.lookup_transform(
-            "placement_link",
+        agv_to_placement_tf = self.tf_buffer.lookup_transform(
             "agv_table_center_link",
+            "placement_link",            
             rclpy.time.Time(),
             timeout=RclpyDuration(seconds=0.2)
         )
+        agv_T_placement_center = transform_to_matrix(agv_to_placement_tf.transform)
+
+        print(f"agv_T_placement_center:\n{agv_T_placement_center}")
 
         # agv_T_place = agv_T_placement_center @ placement_center_T_place
         #             = agv_T_placement_center @ cog_T_grasp
@@ -835,3 +847,4 @@ def main(args=None):
 
 if __name__ == "__main__":
     main()
+
