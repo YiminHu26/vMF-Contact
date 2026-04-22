@@ -662,6 +662,14 @@ class InferenceTest2(AIRNode):
 
         if prediction is None:
             self.get_logger().info("No prediction returned.")
+            # ==========================================
+            pcd_vis_test = o3d.geometry.PointCloud()
+            pcd_vis_test.points = o3d.utility.Vector3dVector(pcd_np)
+
+            # Create a coordinate frame for better orientation in the visualization
+            axis_test = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1, origin=[0, 0, 0])
+            o3d.visualization.draw_geometries([pcd_vis_test, axis_test, obb, cog_mean_marker, cog_axis, obb_pose])  
+            # ===============================================
             return
 
         if isinstance(prediction, torch.Tensor):
@@ -709,6 +717,13 @@ class InferenceTest2(AIRNode):
         # cog_T_grasp = cog_T_agv @ agv_T_grasp
         cog_T_grasp = cog_T_agv @ agv_T_grasp
         print(f"cog_T_grasp:\n{cog_T_grasp}")
+
+        # agv_T_placement_center = self.tf_buffer.lookup_transform(
+        #     "placement_link",
+        #     "agv_table_center_link",
+        #     rclpy.time.Time(),
+        #     timeout=RclpyDuration(seconds=0.2)
+        # )
 
         agv_to_placement_tf = self.tf_buffer.lookup_transform(
             "agv_table_center_link",
