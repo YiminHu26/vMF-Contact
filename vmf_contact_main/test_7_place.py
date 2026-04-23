@@ -712,46 +712,72 @@ class InferenceTest2(AIRNode):
 
         cog_T_agv = np.linalg.inv(agv_T_cog)
 
-        agv_T_grasp = prediction
+        # agv_T_grasp = prediction
+        base_T_grasp = prediction
+        agv_T_base = np.eye(4)
+        agv_T_base[:3, 3] = np.array([-grasp_x_offset, -grasp_y_offset, -grasp_z_offset])  # agv_table_center_link in base_link
 
+        # cog_T_grasp = cog_T_agv @ agv_T_base @ base_T_grasp
         # cog_T_grasp = cog_T_agv @ agv_T_grasp
-        cog_T_grasp = cog_T_agv @ agv_T_grasp
-        print(f"cog_T_grasp:\n{cog_T_grasp}")
+        cog_T_grasp = cog_T_agv @ agv_T_base @ base_T_grasp
 
-        # agv_T_placement_center = self.tf_buffer.lookup_transform(
-        #     "placement_link",
+        print(f"cog_T_grasp:\n{cog_T_grasp}")
+        
+        # ============== agv_T_place =======================================
+        # # agv_T_placement_center = self.tf_buffer.lookup_transform(
+        # #     "placement_link",
+        # #     "agv_table_center_link",
+        # #     rclpy.time.Time(),
+        # #     timeout=RclpyDuration(seconds=0.2)
+        # # )
+
+        # agv_to_placement_tf = self.tf_buffer.lookup_transform(
         #     "agv_table_center_link",
+        #     "placement_link",            
         #     rclpy.time.Time(),
         #     timeout=RclpyDuration(seconds=0.2)
         # )
+        # agv_T_placement_center = transform_to_matrix(agv_to_placement_tf.transform)
 
-        agv_to_placement_tf = self.tf_buffer.lookup_transform(
-            "agv_table_center_link",
-            "placement_link",            
-            rclpy.time.Time(),
-            timeout=RclpyDuration(seconds=0.2)
-        )
-        agv_T_placement_center = transform_to_matrix(agv_to_placement_tf.transform)
+        # print(f"agv_T_placement_center:\n{agv_T_placement_center}")
 
-        print(f"agv_T_placement_center:\n{agv_T_placement_center}")
+        # # agv_T_place = agv_T_placement_center @ placement_center_T_place
+        # #             = agv_T_placement_center @ cog_T_grasp
 
-        # agv_T_place = agv_T_placement_center @ placement_center_T_place
-        #             = agv_T_placement_center @ cog_T_grasp
+        # agv_T_place = agv_T_placement_center @ cog_T_grasp
+        # print(f"agv_T_place:\n{agv_T_place}")
 
-        agv_T_place = agv_T_placement_center @ cog_T_grasp
-        print(f"agv_T_place:\n{agv_T_place}")
-
-        place_quat = quaternion_from_matrix(agv_T_place)
-        place_translation = translation_from_matrix(agv_T_place)
-        place_translation[0] += grasp_x_offset
-        place_translation[1] += grasp_y_offset
-        place_translation[2] += grasp_z_offset
+        # place_quat = quaternion_from_matrix(agv_T_place)
+        # place_translation = translation_from_matrix(agv_T_place)
+        # place_translation[0] += grasp_x_offset
+        # place_translation[1] += grasp_y_offset
+        # place_translation[2] += grasp_z_offset
         
+        # self.get_logger().info(f"Placement pose translation: {place_translation}, quaternion: {place_quat}")
+
+        # place_msg = PoseStamped()
+        # place_msg.header.stamp = self.get_clock().now().to_msg()
+        # place_msg.header.frame_id = "base_link"
+        # place_msg.pose.position.x = float(place_translation[0])
+        # place_msg.pose.position.y = float(place_translation[1])
+        # place_msg.pose.position.z = float(place_translation[2])
+        # place_msg.pose.orientation.x = float(place_quat[0])
+        # place_msg.pose.orientation.y = float(place_quat[1])
+        # place_msg.pose.orientation.z = float(place_quat[2])
+        # place_msg.pose.orientation.w = float(place_quat[3])
+        # self.place_pose_publisher.publish(place_msg)
+        # ========================================================
+
+        # ========placement_center_T_place = cog_T_grasp =====================
+        placement_center_T_place = cog_T_grasp
+
+        place_quat = quaternion_from_matrix(placement_center_T_place)
+        place_translation = translation_from_matrix(placement_center_T_place)
         self.get_logger().info(f"Placement pose translation: {place_translation}, quaternion: {place_quat}")
 
         place_msg = PoseStamped()
         place_msg.header.stamp = self.get_clock().now().to_msg()
-        place_msg.header.frame_id = "base_link"
+        place_msg.header.frame_id = "placement_link"
         place_msg.pose.position.x = float(place_translation[0])
         place_msg.pose.position.y = float(place_translation[1])
         place_msg.pose.position.z = float(place_translation[2])
@@ -760,7 +786,8 @@ class InferenceTest2(AIRNode):
         place_msg.pose.orientation.z = float(place_quat[2])
         place_msg.pose.orientation.w = float(place_quat[3])
         self.place_pose_publisher.publish(place_msg)
-
+        self.get_logger().info("Place pose published.")
+        # ========================================================
 def main_module(
     args: argparse.Namespace,
     learning: bool = True,
