@@ -509,6 +509,8 @@ class vmfContactLightningModule(pl.LightningModule):
         fused_pose=True,
         integrate = True,
         cog = None,
+        cog_axis = None,
+        cog_axis_projection_th = 0.7,
         obb = None,
         ):
         if len(pcd) == 0:
@@ -534,6 +536,8 @@ class vmfContactLightningModule(pl.LightningModule):
                                                     graspness_th=graspness_th,
                                                     grasp_height_th=grasp_height_th,
                                                     grasp_cog_dist_th=grasp_cog_dist_th,
+                                                    cog_axis=cog_axis,
+                                                    cog_axis_projection_th=cog_axis_projection_th,
                                                     pcd_from_prompt=pcd_from_prompt,
                                                     uncertainty_estimator=self.uncertainty_estimator,
                                                     integrate = integrate,
@@ -548,10 +552,22 @@ class vmfContactLightningModule(pl.LightningModule):
             self.grasp_buffer.vis_grasps(pcd_shift = pcd_shift, interactive_vis=interactive_vis, fused_pose=fused_pose, cog = cog, obb = obb)
         
         if fused_pose:
-            pose_chosen = self.grasp_buffer.get_pose_fused_best(convention=convention, sample_num=sample_num)
+            pose_chosen = self.grasp_buffer.get_pose_fused_best(
+                convention=convention,
+                sample_num=sample_num,
+                cog_axis=cog_axis,
+                cog_axis_projection_th=cog_axis_projection_th,
+            )
         else:
-            pose_chosen = self.grasp_buffer.get_pose_curr_best(convention=convention, sample_num=sample_num)
+            pose_chosen = self.grasp_buffer.get_pose_curr_best(
+                convention=convention,
+                sample_num=sample_num,
+                cog_axis=cog_axis,
+                cog_axis_projection_th=cog_axis_projection_th,
+            )
         
         # print("Chosen pose", pose_chosen)
+        if pose_chosen is None:
+            return None
         return pose_chosen.cpu().numpy()
         

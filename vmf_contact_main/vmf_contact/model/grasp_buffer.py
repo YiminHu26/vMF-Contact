@@ -135,6 +135,8 @@ class GraspBuffer:
                     graspness_th = 0.0,
                     grasp_height_th = -0.2, 
                     grasp_cog_dist_th = None,
+                    cog_axis = None,
+                    cog_axis_projection_th = 0.7,
                     pcd_from_prompt=None,
                     prob_baseline="likelihood",
                     uncertainty_estimator=None,
@@ -184,6 +186,8 @@ class GraspBuffer:
                                 grasp_height_th = grasp_height_th, 
                                 graspness_th = graspness_th, 
                                 grasp_cog_dist_th = grasp_cog_dist_th,
+                                cog_axis = cog_axis,
+                                cog_axis_projection_th = cog_axis_projection_th,
                                 pcd_from_prompt = pcd_from_prompt,
                                 integrate = integrate,
                                 cog = cog,
@@ -199,6 +203,8 @@ class GraspBuffer:
                grasp_width_th=0.2, 
                graspness_th=0.0, 
                grasp_cog_dist_th=None,
+               cog_axis=None,
+               cog_axis_projection_th=0.7,
                pcd_from_prompt=None,
                integrate=False,
                cog=None,
@@ -233,6 +239,14 @@ class GraspBuffer:
             midpoint = 0.5 * (cp + cp2)
             midpoint_to_cog_dist = torch.linalg.norm(midpoint - cog, dim=-1)
             filter = filter & (midpoint_to_cog_dist < grasp_cog_dist_th)
+
+        if cog_axis is not None:
+            filter = filter & self.filter_grasps_by_cog_axis(
+                baseline,
+                approach,
+                cog_axis,
+                cog_axis_projection_th,
+            )
 
         if pcd_from_prompt is not None:
             filter = filter & self.filter_grasps_by_pcd(cp, pcd_from_prompt)
@@ -441,7 +455,7 @@ class GraspBuffer:
                                       convention=convention)
         return poses, kappa, graspness
     
-    def get_grasp_curr(self, pcd_from_prompt=None):
+    def get_grasp_curr(self, pcd_from_prompt=None, cog_axis=None, cog_axis_projection_th=0.7):
         baseline = self.buffer_dict["baselines"][-1]
         approach = self.buffer_dict["approaches"][-1]
         cp = self.buffer_dict["cp"][-1]
@@ -458,10 +472,23 @@ class GraspBuffer:
             kappa = kappa[filter]
             graspness = graspness[filter]
 
+        if cog_axis is not None:
+            filter = self.filter_grasps_by_cog_axis(baseline, approach, cog_axis, cog_axis_projection_th)
+            baseline = baseline[filter]
+            approach = approach[filter]
+            cp = cp[filter]
+            grasp_width = grasp_width[filter]
+            kappa = kappa[filter]
+            graspness = graspness[filter]
+
         return baseline, approach, cp, grasp_width, kappa, graspness
     
-    def get_pose_curr(self, convention="xzy", pcd_from_prompt=None):
-        baseline, approach, cp, grasp_width, kappa, graspness = self.get_grasp_curr(pcd_from_prompt)
+    def get_pose_curr(self, convention="xzy", pcd_from_prompt=None, cog_axis=None, cog_axis_projection_th=0.7):
+        baseline, approach, cp, grasp_width, kappa, graspness = self.get_grasp_curr(
+            pcd_from_prompt,
+            cog_axis,
+            cog_axis_projection_th,
+        )
         cp2 = cp + grasp_width * baseline
         poses = rotation_from_contact(baseline=baseline, 
                                       approach=approach, 
@@ -473,17 +500,21 @@ class GraspBuffer:
                            convention="xzy", 
                            sort_by="graspness", 
                            sample_num=1,
-                           pcd_from_prompt=None
+                           pcd_from_prompt=None,
+                           cog_axis=None,
+                           cog_axis_projection_th=0.7,
                            ):
 
         return self.get_pose_best(convention, 
                                   sort_by, 
                                   sample_num, 
                                   pcd_from_prompt, 
-                                  fused_pose=False
+                                  fused_pose=False,
+                                  cog_axis=cog_axis,
+                                  cog_axis_projection_th=cog_axis_projection_th,
                                   )
     
-    def get_grasp_fused(self, pcd_from_prompt=None):
+    def get_grasp_fused(self, pcd_from_prompt=None, cog_axis=None, cog_axis_projection_th=0.7):
         filter = self.graspness_fused > self.graspness_fused.max() * 0.2
         #filter = filter & (self.kappa_fused > self.kappa_fused.max() * 0.5)
         filter = filter.squeeze(-1)
@@ -492,6 +523,15 @@ class GraspBuffer:
             filter = filter & self.filter_grasps_by_pcd(self.cp_fused, pcd_from_prompt)
 
         approach_fused = self.approach_from_bin_score(self.bin_score_fused, self.baseline_fused)
+
+        if cog_axis is not None:
+            filter = filter & self.filter_grasps_by_cog_axis(
+                self.baseline_fused,
+                approach_fused,
+                cog_axis,
+                cog_axis_projection_th,
+            )
+
         baseline = self.baseline_fused[filter]
         approach = approach_fused[filter]
         cp = self.cp_fused[filter]
@@ -500,17 +540,24 @@ class GraspBuffer:
         graspness = self.graspness_fused[filter]
         return baseline, approach, cp, grasp_width, kappa, graspness
     
-    def get_pose_fused(self, convention="xzy", pcd_from_prompt=None):
-        baseline, approach, cp, grasp_width, kappa, graspness = self.get_grasp_fused(pcd_from_prompt)
+    def get_pose_fused(self, convention="xzy", pcd_from_prompt=None, cog_axis=None, cog_axis_projection_th=0.7):
+        baseline, approach, cp, grasp_width, kappa, graspness = self.get_grasp_fused(
+            pcd_from_prompt,
+            cog_axis,
+            cog_axis_projection_th,
+        )
         cp2 = cp + grasp_width * baseline
         poses = rotation_from_contact(baseline=baseline, 
                                       approach=approach, 
                                       translation=(cp+cp2)/2,
                                       convention=convention)
         if len(poses) == 0:
-            pcd_from_prompt_vis = o3d.geometry.PointCloud()
-            pcd_from_prompt_vis.points = o3d.utility.Vector3dVector(pcd_from_prompt)
-            pcd_from_prompt_vis.paint_uniform_color([0, 0, 1])
+            vis_list = []
+            if pcd_from_prompt is not None:
+                pcd_from_prompt_vis = o3d.geometry.PointCloud()
+                pcd_from_prompt_vis.points = o3d.utility.Vector3dVector(pcd_from_prompt)
+                pcd_from_prompt_vis.paint_uniform_color([0, 0, 1])
+                vis_list.append(pcd_from_prompt_vis)
             pcd_vis = o3d.geometry.PointCloud()
             pcd_vis.points = o3d.utility.Vector3dVector(self.cp_fused.cpu().numpy())
             pcd_vis.paint_uniform_color([1, 0, 0])
@@ -519,7 +566,8 @@ class GraspBuffer:
             pcd_all_vis.paint_uniform_color([0, 1, 0])
             # origine frame
             mesh_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1, origin=[0, 0, 0])
-            o3d.visualization.draw_geometries([pcd_from_prompt_vis, pcd_vis, pcd_all_vis, mesh_frame])
+            vis_list.extend([pcd_vis, pcd_all_vis, mesh_frame])
+            o3d.visualization.draw_geometries(vis_list)
             print("No grasp found")
         
         return poses, kappa, graspness
@@ -528,29 +576,45 @@ class GraspBuffer:
                             convention="xzy", 
                             sort_by="graspness", 
                             sample_num=1,
-                            pcd_from_prompt=None
+                            pcd_from_prompt=None,
+                            cog_axis=None,
+                            cog_axis_projection_th=0.7,
                             ):
 
         return self.get_pose_best(convention, 
                                   sort_by, 
                                   sample_num, 
-                                  pcd_from_prompt)
+                                  pcd_from_prompt,
+                                  cog_axis=cog_axis,
+                                  cog_axis_projection_th=cog_axis_projection_th)
     
     def get_pose_best(self, 
                 convention="xzy", 
                 sort_by="graspness", 
                 sample_num=1,
                 pcd_from_prompt=None,
-                fused_pose=True
+                fused_pose=True,
+                cog_axis=None,
+                cog_axis_projection_th=0.7,
                 ):
         if len(self.buffer_dict["pcds"]) == 0:
             print("Buffer is empty, no grasp to choose")
             return None
         
         if fused_pose:
-            poses, kappa, graspness = self.get_pose_fused(convention, pcd_from_prompt)  
+            poses, kappa, graspness = self.get_pose_fused(
+                convention,
+                pcd_from_prompt,
+                cog_axis,
+                cog_axis_projection_th,
+            )  
         else: 
-            poses, kappa, graspness = self.get_pose_curr(convention, pcd_from_prompt)
+            poses, kappa, graspness = self.get_pose_curr(
+                convention,
+                pcd_from_prompt,
+                cog_axis,
+                cog_axis_projection_th,
+            )
         
         if len(poses) == 0:
             print("No grasp found")
@@ -582,3 +646,27 @@ class GraspBuffer:
         print("Shortest distances between prompted pcd and grasps:",dist.min(1).values)
         filter = dist.min(1).values < pcd_from_prompt_matching_th
         return filter
+
+    def filter_grasps_by_cog_axis(self, baseline, approach, cog_axis, cog_axis_projection_th=0.7):
+        if not isinstance(cog_axis, torch.Tensor):
+            cog_axis = torch.tensor(cog_axis, device=baseline.device, dtype=baseline.dtype)
+        else:
+            cog_axis = cog_axis.to(device=baseline.device, dtype=baseline.dtype)
+
+        if cog_axis.ndim == 2:
+            if cog_axis.shape != (3, 3):
+                raise ValueError(f"cog_axis rotation matrix must have shape (3, 3), got {tuple(cog_axis.shape)}")
+            cog_axis = cog_axis[:, 0]
+        elif cog_axis.numel() == 3:
+            cog_axis = cog_axis.reshape(3)
+        else:
+            raise ValueError(f"cog_axis must be a 3-vector or 3x3 rotation matrix, got shape {tuple(cog_axis.shape)}")
+
+        cog_axis_norm = torch.linalg.norm(cog_axis)
+        if torch.isclose(cog_axis_norm, torch.zeros((), device=cog_axis.device, dtype=cog_axis.dtype)):
+            raise ValueError("cog_axis must be non-zero")
+
+        cog_axis = cog_axis / cog_axis_norm
+        grasp_y_axis = torch.nn.functional.normalize(torch.linalg.cross(approach, baseline), dim=-1)
+        projection = torch.sum(grasp_y_axis * cog_axis, dim=-1)
+        return projection > cog_axis_projection_th

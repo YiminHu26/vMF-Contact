@@ -170,6 +170,8 @@ class vmfContactModule():
         fused_pose=True,
         integrate=True,
         cog=None,
+        cog_axis = None,
+        cog_axis_projection_th=0.7,
     ):
         """
         Runs grasp inference through the loaded Lightning module.
@@ -193,6 +195,8 @@ class vmfContactModule():
             fused_pose=fused_pose,
             integrate=integrate,
             cog=cog,
+            cog_axis=cog_axis,
+            cog_axis_projection_th=cog_axis_projection_th,
         )
 
     # ---------------------------------------------------------------------------------------------
