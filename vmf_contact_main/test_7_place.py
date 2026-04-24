@@ -449,7 +449,7 @@ class InferenceTest2(AIRNode):
             return
 
         try:
-            pcd_from_saver = self.compute_pcd_base(target_points=40000)
+            pcd_from_saver = self.compute_pcd_base(target_points=100000)
             self.run_inference_once(pcd_from_saver)
         except Exception as exc:
             self.get_logger().error(f"Inference failed: {exc}")
@@ -578,7 +578,7 @@ class InferenceTest2(AIRNode):
         # pcd = pcd[(pcd[:, 1] > -0.3) & (pcd[:, 1] < 0.3)]
         # pcd = pcd[(pcd[:, 2] > 0.01) & (pcd[:, 2] < 0.3)] # 40000 front distant high foam 20260409
 
-        pcd = pcd[(pcd[:, 0] > -0.3) & (pcd[:, 0] < 0.5)]
+        pcd = pcd[(pcd[:, 0] > -0.3) & (pcd[:, 0] < 0.4)]
         pcd = pcd[(pcd[:, 1] > -0.4) & (pcd[:, 1] < 0.3)]
         pcd = pcd[(pcd[:, 2] > 0.02) & (pcd[:, 2] < 0.3)] # 40000 front distant high foam reversed 20260423
 
