@@ -580,7 +580,7 @@ class InferenceTest2(AIRNode):
 
         pcd = pcd[(pcd[:, 0] > -0.3) & (pcd[:, 0] < 0.5)]
         pcd = pcd[(pcd[:, 1] > -0.4) & (pcd[:, 1] < 0.3)]
-        pcd = pcd[(pcd[:, 2] > 0.01) & (pcd[:, 2] < 0.3)] # 40000 front distant high foam reversed 20260423
+        pcd = pcd[(pcd[:, 2] > 0.02) & (pcd[:, 2] < 0.3)] # 40000 front distant high foam reversed 20260423
 
         pcd_np = pcd.detach().cpu().numpy()
         if pcd_np.shape[0] < 4:
@@ -710,7 +710,7 @@ class InferenceTest2(AIRNode):
         grasp_msg.pose.orientation.w = float(grasp_quat[3])
         self.grasp_pose_publisher.publish(grasp_msg)
         self.get_logger().info("Grasp pose published.")
-        self._visualize_pose_and_pcd(pcd_np, grasp_msg)
+        
 
         agv_T_cog = np.eye(4)
         agv_T_cog[:3, :3] = obb_pose_rot
@@ -794,6 +794,8 @@ class InferenceTest2(AIRNode):
         self.place_pose_publisher.publish(place_msg)
         self.get_logger().info("Place pose published.")
         # ========================================================
+
+        self._visualize_pose_and_pcd(pcd_np, grasp_msg)
 def main_module(
     args: argparse.Namespace,
     learning: bool = True,
