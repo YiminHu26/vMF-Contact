@@ -549,7 +549,7 @@ class vmfContactLightningModule(pl.LightningModule):
             # print("No valid grasp")
             return None
         if vis:
-            self.grasp_buffer.vis_grasps(pcd_shift = pcd_shift, interactive_vis=interactive_vis, fused_pose=fused_pose, cog = cog, obb = obb)
+            self.grasp_buffer.vis_grasps(pcd_shift = pcd_shift, interactive_vis=interactive_vis, fused_pose=fused_pose, cog = cog, obb = obb, cog_axis = cog_axis)
         
         if fused_pose:
             pose_chosen = self.grasp_buffer.get_pose_fused_best(

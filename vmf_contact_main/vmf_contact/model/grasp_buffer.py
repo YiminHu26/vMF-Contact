@@ -74,7 +74,7 @@ class GraspBuffer:
         self.vis.update_renderer()
         self.set_view()
 
-    def vis_grasps(self, pcd_shift=None, interactive_vis=True, fused_pose=False, amplify_kappa=False, cog = None, obb = None):
+    def vis_grasps(self, pcd_shift=None, interactive_vis=True, fused_pose=False, amplify_kappa=False, cog = None, obb = None, cog_axis = None):
 
         if len(self.buffer_dict["pcds"]) == 0:
             print("Buffer is empty, no grasp to visualize")
@@ -108,6 +108,16 @@ class GraspBuffer:
         else:
             cog_marker = None
             print("No COG provided for visualization") 
+
+        if cog_axis is not None and cog is not None:
+            cog_axis_np = cog_axis.detach().cpu().numpy() if isinstance(cog_axis, torch.Tensor) else np.asarray(cog_axis)
+            if cog_axis_np.shape == (3, 3):
+                cog_axis_vis = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.06, origin=[0, 0, 0])
+                cog_axis_vis.rotate(cog_axis_np, center=(0, 0, 0))
+                cog_axis_vis.translate(cog)
+                vis_list.append(cog_axis_vis)
+            else:
+                print(f"Cannot visualize cog_axis with shape {cog_axis_np.shape}; expected (3, 3)")
         
         if obb is not None:
             obb_vis = copy.deepcopy(obb)

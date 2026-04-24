@@ -661,7 +661,7 @@ class InferenceTest2(AIRNode):
             fused_pose=False,
             interactive_vis=True,
             cog=cog_mean,
-            cog_axis=obb_pose_rot[:, 0],
+            cog_axis=obb_pose_rot,
             cog_axis_projection_th=0.7,
         )
         self.get_logger().info(f"Inference time: {time.time() - t:.3f}s")
