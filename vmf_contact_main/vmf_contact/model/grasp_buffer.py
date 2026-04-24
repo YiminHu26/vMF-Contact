@@ -648,6 +648,13 @@ class GraspBuffer:
         return filter
 
     def filter_grasps_by_cog_axis(self, baseline, approach, cog_axis, cog_axis_projection_th=0.7):
+        '''
+        Filter grasps based on the projection of the grasp y-axis (cross product of approach and baseline, i.e. from tcp to camera) onto the given COG axis.
+        (cog_axis: actually the cog x_axis,  which should be aligned with the angle grinder's main direction, i.e. the direction from the handle to the disc)
+        
+        Grasps with a projection above the specified threshold are considered valid.
+        '''        
+        
         if not isinstance(cog_axis, torch.Tensor):
             cog_axis = torch.tensor(cog_axis, device=baseline.device, dtype=baseline.dtype)
         else:
