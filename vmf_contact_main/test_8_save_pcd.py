@@ -536,7 +536,13 @@ class InferenceTest2(AIRNode):
         frame_pcd.colors = o3d.utility.Vector3dVector(np.vstack(axis_colors))
         return frame_pcd
 
-    def _visualize_pose_and_pcd(self, pcd_np: np.ndarray, pose_msg: PoseStamped, axis_length: float = 0.05) -> None:
+    def _visualize_pose_and_pcd(
+        self,
+        pcd_np: np.ndarray,
+        pose_msg: PoseStamped,
+        save_path: Optional[str] = None,
+        axis_length: float = 0.05,
+    ) -> None:
         pcd_vis = o3d.geometry.PointCloud()
         pcd_vis.points = o3d.utility.Vector3dVector(pcd_np)
 
@@ -564,56 +570,45 @@ class InferenceTest2(AIRNode):
         rot = quaternion_matrix(quat)[:3, :3]
 
         vis_list = [pcd_vis]
-        vis_list.append(self._lineset_between_points(pos, pos + rot[:, 0] * axis_length, np.array([1.0, 0.0, 0.0])))
-        vis_list.append(self._lineset_between_points(pos, pos + rot[:, 1] * axis_length, np.array([0.0, 1.0, 0.0])))
-        vis_list.append(self._lineset_between_points(pos, pos + rot[:, 2] * axis_length, np.array([0.0, 0.0, 1.0])))
+        
+        # vis_list.append(self._lineset_between_points(pos, pos + rot[:, 0] * axis_length, np.array([1.0, 0.0, 0.0])))
+        # vis_list.append(self._lineset_between_points(pos, pos + rot[:, 1] * axis_length, np.array([0.0, 1.0, 0.0])))
+        # vis_list.append(self._lineset_between_points(pos, pos + rot[:, 2] * axis_length, np.array([0.0, 0.0, 1.0])))
 
         axis = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1, origin=[0, 0, 0])
         vis_list.append(axis)
 
-        o3d.visualization.draw_geometries(vis_list)
-        default_save_dir = "/home/jetson/wbk_ur10_ws/src/vmf"
-        save_dir = input(
-            "Enter a directory to save the visualization "
-            f"(default: {default_save_dir}): \n "
-        ).strip()
-        if not save_dir:
-            save_dir = default_save_dir
-        elif not os.path.isabs(save_dir):
-            save_dir = os.path.join(default_save_dir, save_dir)
-        os.makedirs(save_dir, exist_ok=True)
-
-        name = input(
-            "Enter a name for the visualization: "
-            'Name convention is "<input>_grasp.ply" \n '
-        ).strip()
-        filename = os.path.join(save_dir, f"{name}_grasp.ply")
+        
+        
         grasp_frame_pcd = self._pose_axes_as_point_cloud(pos, rot, axis_length)
         pcd_with_grasp = o3d.geometry.PointCloud()
-        pcd_with_grasp.points = o3d.utility.Vector3dVector(
-            np.vstack(
-                (
-                    np.asarray(pcd_vis.points),
-                    np.asarray(grasp_frame_pcd.points),
-                )
-            )
-        )
+        pcd_with_grasp.points = o3d.utility.Vector3dVector(np.vstack((np.asarray(pcd_vis.points), np.asarray(grasp_frame_pcd.points))))
         pcd_colors = np.asarray(pcd_vis.colors)
         if len(pcd_colors) != len(pcd_vis.points):
             pcd_colors = np.tile(np.array([0.7, 0.7, 0.7]), (len(pcd_vis.points), 1))
-        pcd_with_grasp.colors = o3d.utility.Vector3dVector(
-            np.vstack(
-                (
-                    pcd_colors,
-                    np.asarray(grasp_frame_pcd.colors),
-                )
-            )
-        )
-        o3d.io.write_point_cloud(filename, pcd_with_grasp)
-        print(f"Saved point cloud to {filename}")
+        pcd_with_grasp.colors = o3d.utility.Vector3dVector(np.vstack((pcd_colors, np.asarray(grasp_frame_pcd.colors))))
+        
+        
+        vis_list.append(grasp_frame_pcd)
+        o3d.visualization.draw_geometries(vis_list)
 
+        if save_path is not None:
+            o3d.io.write_point_cloud(save_path, pcd_with_grasp)
+            print(f"Saved point cloud to {save_path}")
+    
 
     def run_inference_once(self, pcd_from_saver: np.ndarray) -> None:
+        default_save_dir = "/home/jetson/wbk_ur10_ws/src/vmf"
+        name = input(
+            "Enter a name for the visualization: "
+            'Name convention is "<input>_grasp.ply" and "<input>_poses.ply" \n '
+        ).strip()
+        if not name:
+            name = time.strftime("vmf_%Y%m%d_%H%M%S")
+        os.makedirs(default_save_dir, exist_ok=True)
+        grasp_pose_ply_path = os.path.join(default_save_dir, f"{name}_grasp.ply")
+        poses_ply_path = os.path.join(default_save_dir, f"{name}_poses.ply")
+        pcd_no_pose_ply_path = os.path.join(default_save_dir, f"{name}_no_pose.ply")
         
         # The point cloud pcd_from_saver is already in base_link frame and has shape (N, 3)
         pcd = torch.from_numpy(pcd_from_saver).float()
@@ -728,6 +723,9 @@ class InferenceTest2(AIRNode):
             cog=cog_mean,
             cog_axis=obb_pose_rot,
             cog_axis_projection_th=0.7,
+            ply_path=poses_ply_path,
+            line_resolution=32,
+            line_segment_length=1e-7,
         )
         self.get_logger().info(f"Inference time: {time.time() - t:.3f}s")
 
@@ -741,6 +739,9 @@ class InferenceTest2(AIRNode):
             axis_test = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1, origin=[0, 0, 0])
             o3d.visualization.draw_geometries([pcd_vis_test, axis_test, obb, cog_mean_marker, cog_axis, obb_pose])  
             # ===============================================
+            if pcd_no_pose_ply_path is not None:
+                o3d.io.write_point_cloud(pcd_no_pose_ply_path, pcd_vis_test)
+                print(f"Saved point cloud (no pose) to {pcd_no_pose_ply_path}")
             return
 
         if isinstance(prediction, torch.Tensor):
@@ -860,7 +861,7 @@ class InferenceTest2(AIRNode):
         self.get_logger().info("Place pose published.")
         # ========================================================
 
-        self._visualize_pose_and_pcd(pcd_np, grasp_msg)
+        self._visualize_pose_and_pcd(pcd_np, grasp_msg, save_path=grasp_pose_ply_path)
 def main_module(
     args: argparse.Namespace,
     learning: bool = True,
