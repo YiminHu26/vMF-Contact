@@ -113,6 +113,7 @@ def compute_obb_pose_with_world_z(
     y_axis_norm = np.linalg.norm(y_axis)
     if y_axis_norm <= 1e-8:
         y_axis = np.array([0.0, 1.0, 0.0])
+
     else:
         y_axis /= y_axis_norm
     z_axis = world_z
@@ -640,7 +641,7 @@ class InferenceTest2(AIRNode):
 
         pcd = pcd[(pcd[:, 0] > -0.3) & (pcd[:, 0] < 0.4)]
         pcd = pcd[(pcd[:, 1] > -0.4) & (pcd[:, 1] < 0.3)]
-        pcd = pcd[(pcd[:, 2] > 0.02) & (pcd[:, 2] < 0.3)] # 40000 front distant high foam reversed 20260423
+        pcd = pcd[(pcd[:, 2] > 0.035) & (pcd[:, 2] < 0.3)] # 40000 front distant high foam reversed 20260423
 
         pcd_np = pcd.detach().cpu().numpy()
         if pcd_np.shape[0] < 4:
