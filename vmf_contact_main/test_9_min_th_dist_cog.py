@@ -696,7 +696,7 @@ class InferenceTest2(AIRNode):
         # cog_pcd_marker.translate(cog_pcd)
 
         # The mean of the bounding box center and the point cloud center of gravity, which can be a more balanced estimate of the object center.
-        cog_mean = (obb_pose_center + cog_pcd) / 2
+        cog_mean = 0.2 * obb_pose_center + 0.8 * cog_pcd
 
         # Visual marker for center of gravity
         cog_mean_marker = o3d.geometry.TriangleMesh.create_sphere(radius=0.01)
@@ -714,9 +714,10 @@ class InferenceTest2(AIRNode):
 
         prediction = self.model.inference(
             pcd.to("cuda"),
-            graspness_th=0.6,
-            grasp_height_th=0.025,
-            grasp_cog_dist_th=0.05,
+            graspness_th=0.4,
+            grasp_height_th=0.027,
+            grasp_cog_dist_th=0.04,
+            grasp_cog_min_dist_th=-0.02,
             vis=True,
             integrate=False,
             fused_pose=False,

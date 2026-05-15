@@ -354,6 +354,7 @@ class GraspBuffer:
                     graspness_th = 0.0,
                     grasp_height_th = -0.2, 
                     grasp_cog_dist_th = None,
+                    grasp_cog_min_dist_th = None,
                     cog_axis = None,
                     cog_axis_projection_th = 0.7,
                     pcd_from_prompt=None,
@@ -405,6 +406,7 @@ class GraspBuffer:
                                 grasp_height_th = grasp_height_th, 
                                 graspness_th = graspness_th, 
                                 grasp_cog_dist_th = grasp_cog_dist_th,
+                                grasp_cog_min_dist_th = grasp_cog_min_dist_th,
                                 cog_axis = cog_axis,
                                 cog_axis_projection_th = cog_axis_projection_th,
                                 pcd_from_prompt = pcd_from_prompt,
@@ -422,6 +424,7 @@ class GraspBuffer:
                grasp_width_th=0.2, 
                graspness_th=0.0, 
                grasp_cog_dist_th=None,
+               grasp_cog_min_dist_th=None,
                cog_axis=None,
                cog_axis_projection_th=0.7,
                pcd_from_prompt=None,
@@ -449,7 +452,7 @@ class GraspBuffer:
                     (cp2[..., -1] > grasp_height_th)
         filter = filter.squeeze(-1)
 
-        if cog is not None and grasp_cog_dist_th is not None:
+        if cog is not None and (grasp_cog_dist_th is not None or grasp_cog_min_dist_th is not None):
             if not isinstance(cog, torch.Tensor):
                 cog = torch.tensor(cog, device=cp.device, dtype=cp.dtype)
             else:
@@ -457,7 +460,10 @@ class GraspBuffer:
 
             midpoint = 0.5 * (cp + cp2)
             midpoint_to_cog_dist = torch.linalg.norm(midpoint - cog, dim=-1)
-            filter = filter & (midpoint_to_cog_dist < grasp_cog_dist_th)
+            if grasp_cog_dist_th is not None:
+                filter = filter & (midpoint_to_cog_dist < grasp_cog_dist_th)
+            if grasp_cog_min_dist_th is not None:
+                filter = filter & (midpoint_to_cog_dist > grasp_cog_min_dist_th)
 
         if cog_axis is not None:
             filter = filter & self.filter_grasps_by_cog_axis(
@@ -466,6 +472,12 @@ class GraspBuffer:
                 cog_axis,
                 cog_axis_projection_th,
             )
+            if cog is not None:
+                filter = filter & self.filter_grasps_by_positive_cog_x_axis(
+                    0.5 * (cp + cp2),
+                    cog,
+                    cog_axis,
+                )
 
         if pcd_from_prompt is not None:
             filter = filter & self.filter_grasps_by_pcd(cp, pcd_from_prompt)
@@ -866,18 +878,11 @@ class GraspBuffer:
         filter = dist.min(1).values < pcd_from_prompt_matching_th
         return filter
 
-    def filter_grasps_by_cog_axis(self, baseline, approach, cog_axis, cog_axis_projection_th=0.7):
-        '''
-        Filter grasps based on the projection of the grasp y-axis (cross product of approach and baseline, i.e. from tcp to camera) onto the given COG axis.
-        (cog_axis: actually the cog x_axis,  which should be aligned with the angle grinder's main direction, i.e. the direction from the handle to the disc)
-        
-        Grasps with a projection above the specified threshold are considered valid.
-        '''        
-        
+    def _cog_x_axis_tensor(self, cog_axis, device, dtype):
         if not isinstance(cog_axis, torch.Tensor):
-            cog_axis = torch.tensor(cog_axis, device=baseline.device, dtype=baseline.dtype)
+            cog_axis = torch.tensor(cog_axis, device=device, dtype=dtype)
         else:
-            cog_axis = cog_axis.to(device=baseline.device, dtype=baseline.dtype)
+            cog_axis = cog_axis.to(device=device, dtype=dtype)
 
         if cog_axis.ndim == 2:
             if cog_axis.shape != (3, 3):
@@ -892,7 +897,27 @@ class GraspBuffer:
         if torch.isclose(cog_axis_norm, torch.zeros((), device=cog_axis.device, dtype=cog_axis.dtype)):
             raise ValueError("cog_axis must be non-zero")
 
-        cog_axis = cog_axis / cog_axis_norm
+        return cog_axis / cog_axis_norm
+
+    def filter_grasps_by_positive_cog_x_axis(self, grasp_points, cog, cog_axis):
+        if not isinstance(cog, torch.Tensor):
+            cog = torch.tensor(cog, device=grasp_points.device, dtype=grasp_points.dtype)
+        else:
+            cog = cog.to(device=grasp_points.device, dtype=grasp_points.dtype)
+
+        cog_axis = self._cog_x_axis_tensor(cog_axis, grasp_points.device, grasp_points.dtype)
+        local_x = torch.sum((grasp_points - cog) * cog_axis, dim=-1)
+        return local_x > 0
+
+    def filter_grasps_by_cog_axis(self, baseline, approach, cog_axis, cog_axis_projection_th=0.7):
+        '''
+        Filter grasps based on the projection of the grasp y-axis (cross product of approach and baseline, i.e. from tcp to camera) onto the given COG axis.
+        (cog_axis: actually the cog x_axis,  which should be aligned with the angle grinder's main direction, i.e. the direction from the handle to the disc)
+        
+        Grasps with a projection above the specified threshold are considered valid.
+        '''        
+        
+        cog_axis = self._cog_x_axis_tensor(cog_axis, baseline.device, baseline.dtype)
         grasp_y_axis = torch.nn.functional.normalize(torch.linalg.cross(approach, baseline), dim=-1)
         projection = torch.sum(grasp_y_axis * cog_axis, dim=-1)
         return projection > cog_axis_projection_th
