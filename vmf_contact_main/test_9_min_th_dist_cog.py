@@ -549,7 +549,7 @@ class InferenceTest2(AIRNode):
 
         grasp_x_offset = -0.70
         grasp_y_offset = 0.0
-        grasp_z_offset = 0.101
+        grasp_z_offset = 0.131
 
         pos = np.array(
             [
@@ -621,7 +621,10 @@ class InferenceTest2(AIRNode):
         # pcd_bounds=torch.tensor([[-0.95, -0.5, -0.399], [0.05, 0.5, 0.601]], dtype=torch.float32) # 40000 front high new 1 2 3
         
         # agv_table_center_link [-0.7, 0, 0.101] in base_link
-        pcd_bounds = torch.tensor([[-1.2, -0.5, -0.399], [-0.2, 0.5, 0.601]], dtype=torch.float32)  # 40000 front distant high 20260402
+        # pcd_bounds = torch.tensor([[-1.2, -0.5, -0.399], [-0.2, 0.5, 0.601]], dtype=torch.float32)  # 40000 front distant high 20260402
+        
+        # agv_table_center_link [-0.7, 0, 0.131] in base_link
+        pcd_bounds = torch.tensor([[-1.2, -0.5, -0.369], [-0.2, 0.5, 0.631]], dtype=torch.float32)  # 40000 front distant high 20260402
         pcd_shift = (pcd_bounds[0] + pcd_bounds[1]) / 2 
         pcd_resize = pcd_bounds[1] - pcd_bounds[0] 
 
@@ -641,7 +644,7 @@ class InferenceTest2(AIRNode):
 
         pcd = pcd[(pcd[:, 0] > -0.3) & (pcd[:, 0] < 0.4)]
         pcd = pcd[(pcd[:, 1] > -0.4) & (pcd[:, 1] < 0.3)]
-        pcd = pcd[(pcd[:, 2] > 0.03) & (pcd[:, 2] < 0.3)] # 40000 front distant high foam reversed 20260423
+        pcd = pcd[(pcd[:, 2] > 0.0) & (pcd[:, 2] < 0.3)] # 40000 front distant high foam reversed 20260423
 
         pcd_np = pcd.detach().cpu().numpy()
         if pcd_np.shape[0] < 4:
@@ -710,14 +713,14 @@ class InferenceTest2(AIRNode):
         # ====================================================================
         grasp_x_offset = -0.70
         grasp_y_offset = 0.0
-        grasp_z_offset = 0.101
+        grasp_z_offset = 0.131
 
         prediction = self.model.inference(
             pcd.to("cuda"),
-            graspness_th=0.4,
-            grasp_height_th=0.027,
+            graspness_th=0.5,
+            grasp_height_th=0.0,
             grasp_cog_dist_th=0.04,
-            grasp_cog_min_dist_th=-0.02,
+            grasp_cog_min_dist_th=-0.04,
             vis=True,
             integrate=False,
             fused_pose=False,
