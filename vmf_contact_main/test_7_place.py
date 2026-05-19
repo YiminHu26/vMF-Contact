@@ -580,7 +580,7 @@ class InferenceTest2(AIRNode):
 
         pcd = pcd[(pcd[:, 0] > -0.3) & (pcd[:, 0] < 0.4)]
         pcd = pcd[(pcd[:, 1] > -0.4) & (pcd[:, 1] < 0.3)]
-        pcd = pcd[(pcd[:, 2] > 0.02) & (pcd[:, 2] < 0.3)] # 40000 front distant high foam reversed 20260423
+        pcd = pcd[(pcd[:, 2] > 0.035) & (pcd[:, 2] < 0.3)] # 40000 front distant high foam reversed 20260423
 
         pcd_np = pcd.detach().cpu().numpy()
         if pcd_np.shape[0] < 4:

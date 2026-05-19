@@ -65,7 +65,7 @@ def denoise_point_cloud(
 
     print(
         f"Denoise: raw={len(points_np)}, "
-        f"after_stat={len(stat_inliers)}, after_radius={len(radius_inliers)}"
+        f"after_stat={len(stat_inliers)}, after_radius={len(ra/arm_vmf/place_posedius_inliers)}"
     )
     return np.asarray(pcd_radius.points), pcd_radius
 
@@ -641,7 +641,7 @@ class InferenceTest2(AIRNode):
 
         pcd = pcd[(pcd[:, 0] > -0.3) & (pcd[:, 0] < 0.4)]
         pcd = pcd[(pcd[:, 1] > -0.4) & (pcd[:, 1] < 0.3)]
-        pcd = pcd[(pcd[:, 2] > 0.035) & (pcd[:, 2] < 0.3)] # 40000 front distant high foam reversed 20260423
+        pcd = pcd[(pcd[:, 2] > 0.03) & (pcd[:, 2] < 0.3)] # 40000 front distant high foam reversed 20260423
 
         pcd_np = pcd.detach().cpu().numpy()
         if pcd_np.shape[0] < 4:
