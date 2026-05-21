@@ -2,7 +2,6 @@ import numpy as np
 import open3d as o3d
 import torch
 from typing import Union, Optional
-from pathlib import Path
 
 #### Codes borrowed from pytorch3d ####
 
@@ -16,7 +15,6 @@ from vmf_contact.model.utils import *
 from vmf_contact.nn.util import match
 from .utils import group_and_sum
 from sklearn.cluster import DBSCAN
-import copy
 
 Device = Union[str, torch.device]
 INTEG = True
@@ -75,188 +73,6 @@ class GraspBuffer:
         self.vis.update_renderer()
         self.set_view()
 
-    @staticmethod
-    def _point_cloud_to_mesh(pcd, point_radius=None, max_export_points=5000):
-        points = np.asarray(pcd.points)
-        if len(points) == 0:
-            return o3d.geometry.TriangleMesh()
-
-        colors = np.asarray(pcd.colors)
-        if len(colors) != len(points):
-            colors = np.tile(np.array([[0.65, 0.65, 0.65]]), (len(points), 1))
-
-        if max_export_points is not None and len(points) > max_export_points:
-            indices = np.linspace(0, len(points) - 1, max_export_points, dtype=int)
-            points = points[indices]
-            colors = colors[indices]
-
-        if point_radius is None:
-            extent = np.ptp(points, axis=0).max()
-            point_radius = max(float(extent) * 0.0015, 5e-4)
-
-        mesh = o3d.geometry.TriangleMesh()
-        sphere_template = o3d.geometry.TriangleMesh.create_sphere(
-            radius=point_radius,
-            resolution=4,
-        )
-        sphere_template.compute_vertex_normals()
-        for point, color in zip(points, colors):
-            sphere = copy.deepcopy(sphere_template)
-            sphere.paint_uniform_color(color)
-            sphere.translate(point)
-            mesh += sphere
-        return mesh
-
-    @staticmethod
-    def _create_dense_cylinder_between_points(
-        p1,
-        p2,
-        radius=5e-4,
-        color=[0.1, 0.1, 0.7],
-        resolution=32,
-        line_segment_length=2e-3,
-    ):
-        direction = p2 - p1
-        length = np.linalg.norm(direction)
-        if length < 1e-12:
-            return o3d.geometry.TriangleMesh()
-
-        direction = direction / length
-        line_segment_length = max(float(line_segment_length), 1e-6)
-        split = max(4, int(np.ceil(length / line_segment_length)))
-        cylinder = o3d.geometry.TriangleMesh.create_cylinder(
-            radius=radius,
-            height=length,
-            resolution=resolution,
-            split=split,
-        )
-        cylinder.compute_vertex_normals()
-
-        z_axis = np.array([0, 0, 1])
-        rotation_axis = np.cross(z_axis, direction)
-        rotation_axis_norm = np.linalg.norm(rotation_axis)
-        if rotation_axis_norm > 0:
-            rotation_axis /= rotation_axis_norm
-            dot = np.clip(np.dot(z_axis, direction), -1.0, 1.0)
-            rotation_angle = np.arccos(dot)
-            rotation_matrix = o3d.geometry.get_rotation_matrix_from_axis_angle(
-                rotation_axis * rotation_angle
-            )
-            cylinder.rotate(rotation_matrix, center=(0, 0, 0))
-
-        cylinder.translate((p1 + p2) / 2)
-        cylinder.paint_uniform_color(color)
-        return cylinder
-
-    @classmethod
-    def _line_set_to_mesh(
-        cls,
-        line_set,
-        line_radius=5e-4,
-        line_resolution=32,
-        line_segment_length=2e-3,
-    ):
-        points = np.asarray(line_set.points)
-        lines = np.asarray(line_set.lines)
-        colors = np.asarray(line_set.colors)
-        mesh = o3d.geometry.TriangleMesh()
-
-        for i, line in enumerate(lines):
-            p1, p2 = points[line[0]], points[line[1]]
-            if np.linalg.norm(p2 - p1) < 1e-12:
-                continue
-            color = colors[i] if i < len(colors) else [0.1, 0.1, 0.7]
-            mesh += cls._create_dense_cylinder_between_points(
-                p1,
-                p2,
-                radius=line_radius,
-                color=color,
-                resolution=line_resolution,
-                line_segment_length=line_segment_length,
-            )
-        return mesh
-
-    @classmethod
-    def _geometry_to_mesh(
-        cls,
-        geom,
-        point_radius=None,
-        line_radius=5e-4,
-        line_resolution=32,
-        line_segment_length=2e-3,
-        max_export_points=5000,
-    ):
-        if isinstance(geom, o3d.geometry.TriangleMesh):
-            mesh = copy.deepcopy(geom)
-            mesh.compute_vertex_normals()
-            return mesh
-        if isinstance(geom, o3d.geometry.PointCloud):
-            return cls._point_cloud_to_mesh(geom, point_radius, max_export_points)
-        if isinstance(geom, o3d.geometry.LineSet):
-            return cls._line_set_to_mesh(
-                geom,
-                line_radius,
-                line_resolution,
-                line_segment_length,
-            )
-        if isinstance(geom, o3d.geometry.OrientedBoundingBox):
-            line_set = o3d.geometry.LineSet.create_from_oriented_bounding_box(geom)
-            line_set.paint_uniform_color(geom.color)
-            return cls._line_set_to_mesh(
-                line_set,
-                line_radius,
-                line_resolution,
-                line_segment_length,
-            )
-        if isinstance(geom, o3d.geometry.AxisAlignedBoundingBox):
-            line_set = o3d.geometry.LineSet.create_from_axis_aligned_bounding_box(geom)
-            line_set.paint_uniform_color(geom.color)
-            return cls._line_set_to_mesh(
-                line_set,
-                line_radius,
-                line_resolution,
-                line_segment_length,
-            )
-        print(f"Skipping unsupported geometry for PLY export: {type(geom).__name__}")
-        return o3d.geometry.TriangleMesh()
-
-    def save_vis_list_as_ply(
-        self,
-        vis_list,
-        ply_path,
-        point_radius=None,
-        line_radius=5e-4,
-        line_resolution=32,
-        line_segment_length=2e-3,
-        max_export_points=5000,
-    ):
-        """Save Open3D visualization geometries as one PLY triangle mesh."""
-        scene_mesh = o3d.geometry.TriangleMesh()
-        for geom in vis_list:
-            scene_mesh += self._geometry_to_mesh(
-                geom,
-                point_radius=point_radius,
-                line_radius=line_radius,
-                line_resolution=line_resolution,
-                line_segment_length=line_segment_length,
-                max_export_points=max_export_points,
-            )
-
-        if len(scene_mesh.vertices) == 0:
-            print("No exportable geometry found for PLY export")
-            return False
-
-        ply_path = Path(ply_path)
-        if ply_path.suffix.lower() != ".ply":
-            ply_path = ply_path.with_suffix(".ply")
-        ply_path.parent.mkdir(parents=True, exist_ok=True)
-        success = o3d.io.write_triangle_mesh(str(ply_path), scene_mesh, write_vertex_colors=True)
-        if success:
-            print(f"Saved point cloud and poses to {ply_path}")
-        else:
-            print(f"Failed to save point cloud and poses to {ply_path}")
-        return success
-
     def vis_grasps(
         self,
         pcd_shift=None,
@@ -264,14 +80,7 @@ class GraspBuffer:
         fused_pose=False,
         amplify_kappa=False,
         cog=None,
-        obb=None,
         cog_axis=None,
-        ply_path=None,
-        point_radius=None,
-        line_radius=5e-4,
-        line_resolution=32,
-        line_segment_length=2e-3,
-        max_export_points=5000,
     ):
 
         if len(self.buffer_dict["pcds"]) == 0:
@@ -305,7 +114,7 @@ class GraspBuffer:
             vis_list.append(cog_marker)   
         else:
             cog_marker = None
-            print("No COG provided for visualization") 
+            print("No center of gravity provided for visualization") 
 
         if cog_axis is not None and cog is not None:
             cog_axis_np = cog_axis.detach().cpu().numpy() if isinstance(cog_axis, torch.Tensor) else np.asarray(cog_axis)
@@ -316,28 +125,8 @@ class GraspBuffer:
                 vis_list.append(cog_axis_vis)
             else:
                 print(f"Cannot visualize cog_axis with shape {cog_axis_np.shape}; expected (3, 3)")
-        
-        if obb is not None:
-            obb_vis = copy.deepcopy(obb)
-            obb_vis.color = (1.0, 0.0, 0.0)  # RED
-            vis_list.append(obb_vis)
-        
-        else:
-            obb_vis = None
-            print("No OBB provided for visualization")
                 
         
-        if ply_path is not None:
-            self.save_vis_list_as_ply(
-                vis_list,
-                ply_path,
-                point_radius=point_radius,
-                line_radius=line_radius,
-                line_resolution=line_resolution,
-                line_segment_length=line_segment_length,
-                max_export_points=max_export_points,
-            )
-
         if not hasattr(self, "vis") and pcd_shift is not None:
             self.create_vis()
             self.view_center = pcd_shift
@@ -861,9 +650,13 @@ class GraspBuffer:
                 
         poses_candidates = poses[torch.argsort(score, descending=True)][:sample_num]
 
-        #randomly sample 1 poses
-        pose_chosen = poses_candidates[random.randint(0, sample_num-1)].squeeze(0)
+        # randomly sample 1 poses
+        # pose_chosen = poses_candidates[random.randint(0, sample_num-1)].squeeze(0)
+
+        # choose the best pose
+        pose_chosen = poses_candidates[0].squeeze(0)
         return pose_chosen
+        
         
     def filter_grasps_by_pcd(self, cp, pcd_from_prompt):
         # pcd_vis = o3d.geometry.PointCloud()

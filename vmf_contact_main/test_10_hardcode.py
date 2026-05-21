@@ -44,37 +44,17 @@ import glob
 import warnings
 
 
-def denoise_point_cloud(
-    points_np: np.ndarray,
-    nb_neighbors: int = 30,
-    std_ratio: float = 1.0,
-    radius: float = 0.03,
-    min_points: int = 12,
-) -> tuple[np.ndarray, o3d.geometry.PointCloud]:
-    pcd = o3d.geometry.PointCloud()
-    pcd.points = o3d.utility.Vector3dVector(points_np)
-
-    pcd_stat, stat_inliers = pcd.remove_statistical_outlier(
-        nb_neighbors=nb_neighbors,
-        std_ratio=std_ratio,
-    )
-    pcd_radius, radius_inliers = pcd_stat.remove_radius_outlier(
-        nb_points=min_points,
-        radius=radius,
-    )
-
-    print(
-        f"Denoise: raw={len(points_np)}, "
-        f"after_stat={len(stat_inliers)}, after_radius={len(ra/arm_vmf/place_posedius_inliers)}"
-    )
-    return np.asarray(pcd_radius.points), pcd_radius
-
-
 def compute_obb_pose_with_world_z(
     obb: o3d.geometry.OrientedBoundingBox,
     points_np: np.ndarray,
     world_z: np.ndarray = np.array([0.0, 0.0, 1.0]),
 ) -> tuple[np.ndarray, np.ndarray]:
+    ''' Compute a pose for the Oriented Bounding Box (OBB) of a point cloud, 
+
+    with the constraint that the Z-axis of the OBB must be aligned with the given world Z direction,
+    and the x-axis should be oriented such that the positive end of x-axis points towards the side
+    with higher average height (z value) in the point cloud.
+    '''
     center = np.asarray(obb.center)
     rot = np.asarray(obb.R)
     extent = np.asarray(obb.extent)
@@ -109,14 +89,15 @@ def compute_obb_pose_with_world_z(
             if neg_mean_height > pos_mean_height:
                 x_axis = -x_axis
 
-    y_axis = np.cross(world_z, x_axis)
+    z_axis = world_z
+
+    y_axis = np.cross(z_axis, x_axis)
     y_axis_norm = np.linalg.norm(y_axis)
     if y_axis_norm <= 1e-8:
         y_axis = np.array([0.0, 1.0, 0.0])
-
     else:
         y_axis /= y_axis_norm
-    z_axis = world_z
+    
 
     constrained_rot = np.column_stack((x_axis, y_axis, z_axis))
     return center, constrained_rot
@@ -500,16 +481,16 @@ class InferenceTest2(AIRNode):
             return pcd
 
         replace = num_points < target_points
-        sampled_indices = np.random.choice(num_points, size=target_points, replace=replace)
+        sampled_indices = np.random.Generator.choice(num_points, size=target_points, replace=replace)
         return pcd[sampled_indices]
 
 
-    def _lineset_between_points(self, a: np.ndarray, b: np.ndarray, color: np.ndarray) -> o3d.geometry.LineSet:
-        line = o3d.geometry.LineSet()
-        line.points = o3d.utility.Vector3dVector([a, b])
-        line.lines = o3d.utility.Vector2iVector([[0, 1]])
-        line.colors = o3d.utility.Vector3dVector(np.tile(color, (1, 1)))
-        return line
+    # def _lineset_between_points(self, a: np.ndarray, b: np.ndarray, color: np.ndarray) -> o3d.geometry.LineSet:
+    #     line = o3d.geometry.LineSet()
+    #     line.points = o3d.utility.Vector3dVector([a, b])
+    #     line.lines = o3d.utility.Vector2iVector([[0, 1]])
+    #     line.colors = o3d.utility.Vector3dVector(np.tile(color, (1, 1)))
+    #     return line
 
     def _pose_axes_as_point_cloud(
         self,
@@ -532,24 +513,33 @@ class InferenceTest2(AIRNode):
             axis_points.append(points)
             axis_colors.append(np.tile(color, (points_per_axis, 1)))
 
-        frame_pcd = o3d.geometry.PointCloud()
-        frame_pcd.points = o3d.utility.Vector3dVector(np.vstack(axis_points))
-        frame_pcd.colors = o3d.utility.Vector3dVector(np.vstack(axis_colors))
-        return frame_pcd
+        pose_axes = o3d.geometry.PointCloud()
+        pose_axes.points = o3d.utility.Vector3dVector(np.vstack(axis_points))
+        pose_axes.colors = o3d.utility.Vector3dVector(np.vstack(axis_colors))
+        return pose_axes
 
     def _visualize_pose_and_pcd(
         self,
         pcd_np: np.ndarray,
         pose_msg: PoseStamped,
+        save_pcd: Optional[bool] = None,
         save_path: Optional[str] = None,
         axis_length: float = 0.05,
+        grasp_x_offset: float = 0.0,
+        grasp_y_offset: float = 0.0,
+        grasp_z_offset: float = 0.0,
     ) -> None:
+        ''' Visualize the point cloud and the predicted grasp pose in open3d, 
+        
+        and optionally save the combined point cloud with grasp pose as a ply file.
+        (The grasp pose would be saved as lines visually but actually points in the ply file)
+        '''
         pcd_vis = o3d.geometry.PointCloud()
         pcd_vis.points = o3d.utility.Vector3dVector(pcd_np)
 
-        grasp_x_offset = -0.70
-        grasp_y_offset = 0.0
-        grasp_z_offset = 0.131
+        # grasp_x_offset = -0.70
+        # grasp_y_offset = 0.0
+        # grasp_z_offset = 0.131
 
         pos = np.array(
             [
@@ -571,97 +561,69 @@ class InferenceTest2(AIRNode):
         rot = quaternion_matrix(quat)[:3, :3]
 
         vis_list = [pcd_vis]
-        
-        # vis_list.append(self._lineset_between_points(pos, pos + rot[:, 0] * axis_length, np.array([1.0, 0.0, 0.0])))
-        # vis_list.append(self._lineset_between_points(pos, pos + rot[:, 1] * axis_length, np.array([0.0, 1.0, 0.0])))
-        # vis_list.append(self._lineset_between_points(pos, pos + rot[:, 2] * axis_length, np.array([0.0, 0.0, 1.0])))
 
         axis = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1, origin=[0, 0, 0])
         vis_list.append(axis)
-
         
-        
-        grasp_frame_pcd = self._pose_axes_as_point_cloud(pos, rot, axis_length)
+        grasp_pose_as_points = self._pose_axes_as_point_cloud(pos, rot, axis_length)
         pcd_with_grasp = o3d.geometry.PointCloud()
-        pcd_with_grasp.points = o3d.utility.Vector3dVector(np.vstack((np.asarray(pcd_vis.points), np.asarray(grasp_frame_pcd.points))))
+        pcd_with_grasp.points = o3d.utility.Vector3dVector(np.vstack((np.asarray(pcd_vis.points), np.asarray(grasp_pose_as_points.points))))
         pcd_colors = np.asarray(pcd_vis.colors)
         if len(pcd_colors) != len(pcd_vis.points):
             pcd_colors = np.tile(np.array([0.7, 0.7, 0.7]), (len(pcd_vis.points), 1))
-        pcd_with_grasp.colors = o3d.utility.Vector3dVector(np.vstack((pcd_colors, np.asarray(grasp_frame_pcd.colors))))
+        pcd_with_grasp.colors = o3d.utility.Vector3dVector(np.vstack((pcd_colors, np.asarray(grasp_pose_as_points.colors))))
         
-        
-        vis_list.append(grasp_frame_pcd)
+        vis_list.append(grasp_pose_as_points)
         o3d.visualization.draw_geometries(vis_list)
 
-        if save_path is not None:
+        if save_pcd is not None and save_path is not None:
             o3d.io.write_point_cloud(save_path, pcd_with_grasp)
-            print(f"Saved point cloud to {save_path}")
+            print(f"Saved point cloud with grasp pose to {save_path}")
     
 
     def run_inference_once(self, pcd_from_saver: np.ndarray) -> None:
+        t = time.time()
+        
         default_save_dir = "/home/jetson/wbk_ur10_ws/src/vmf"
         name = input(
             "Enter a name for the visualization: "
-            'Name convention is "<input>_grasp.ply" and "<input>_poses.ply" \n '
+            'Name convention is "<input>_grasp.ply" or "<input>_no_pose.ply" \n '
         ).strip()
+        # TODO: add a timestamp to the name to avoid overwriting previous results
         if not name:
-            name = time.strftime("vmf_%Y%m%d_%H%M%S")
+            name = time.strftime("vmf_" + str(t))
         os.makedirs(default_save_dir, exist_ok=True)
         grasp_pose_ply_path = os.path.join(default_save_dir, f"{name}_grasp.ply")
-        poses_ply_path = os.path.join(default_save_dir, f"{name}_poses.ply")
         pcd_no_pose_ply_path = os.path.join(default_save_dir, f"{name}_no_pose.ply")
         
         # The point cloud pcd_from_saver is already in base_link frame and has shape (N, 3)
         pcd = torch.from_numpy(pcd_from_saver).float()
 
-        t = time.time()
+        
 
-        # Shift and scale the point cloud, so that the center of the region of interest is at the agv_table_link ([-0.45, 0, 0.101] in base_link)
-        # and the whole area fits in a unit cube. This can help with model generalization and convergence.
-        # pcd_bounds=torch.tensor([[-0.95, -0.5, -0.399], [0.05, 0.5, 0.601]], dtype=torch.float32) # 40000 front high new 1 2 3
+        '''
+        Shift and scale the point cloud, so that the center of the region of 
+        interest is at the agv_table_link and the whole area fits in a unit cube. 
+        '''
         
         # agv_table_center_link [-0.7, 0, 0.101] in base_link
         # pcd_bounds = torch.tensor([[-1.2, -0.5, -0.399], [-0.2, 0.5, 0.601]], dtype=torch.float32)  # 40000 front distant high 20260402
         
         # agv_table_center_link [-0.7, 0, 0.131] in base_link
-        pcd_bounds = torch.tensor([[-1.2, -0.5, -0.369], [-0.2, 0.5, 0.631]], dtype=torch.float32)  # 40000 front distant high 20260402
+        pcd_bounds = torch.tensor([[-1.2, -0.5, -0.369], [-0.2, 0.5, 0.631]], dtype=torch.float32)  # 40000 front distant high foam 20260519
         pcd_shift = (pcd_bounds[0] + pcd_bounds[1]) / 2 
         pcd_resize = pcd_bounds[1] - pcd_bounds[0] 
 
-        pcd = (pcd.view(-1, 3) - pcd_shift) / pcd_resize  # with bounds
-
-        # pcd = pcd[(pcd[:, 0] > -1.0) & (pcd[:, 0] < 0.5)]
-        # pcd = pcd[(pcd[:, 1] > -0.5) & (pcd[:, 1] < 0.5)]
-        # pcd = pcd[(pcd[:, 2] > 0.09) & (pcd[:, 2] < 0.3)]  # 40000 & 240000 front high new 1 2 3
-
-        # pcd = pcd[(pcd[:, 0] > -0.15) & (pcd[:, 0] < 0.5)]
-        # pcd = pcd[(pcd[:, 1] > -0.2) & (pcd[:, 1] < 0.3)]
-        # pcd = pcd[(pcd[:, 2] > 0.0) & (pcd[:, 2] < 0.3)] # 40000 front distant high 20260402
-
-        # pcd = pcd[(pcd[:, 0] > -0.15) & (pcd[:, 0] < 0.5)]
-        # pcd = pcd[(pcd[:, 1] > -0.3) & (pcd[:, 1] < 0.3)]
-        # pcd = pcd[(pcd[:, 2] > 0.01) & (pcd[:, 2] < 0.3)] # 40000 front distant high foam 20260409
+        pcd = (pcd.view(-1, 3) - pcd_shift) / pcd_resize
 
         pcd = pcd[(pcd[:, 0] > -0.3) & (pcd[:, 0] < 0.4)]
         pcd = pcd[(pcd[:, 1] > -0.4) & (pcd[:, 1] < 0.3)]
-        pcd = pcd[(pcd[:, 2] > -0.01) & (pcd[:, 2] < 0.3)] # 40000 front distant high foam reversed 20260423
+        pcd = pcd[(pcd[:, 2] > -0.01) & (pcd[:, 2] < 0.3)] # 40000 front distant high foam reversed 20260519
 
         pcd_np = pcd.detach().cpu().numpy()
         if pcd_np.shape[0] < 4:
             raise RuntimeError(
                 f"Not enough cropped points for OBB computation: {pcd_np.shape[0]}"
-            )
-
-        # pcd_np, _ = denoise_point_cloud(
-        #     pcd_np,
-        #     nb_neighbors=30,
-        #     std_ratio=1.0,
-        #     radius=0.03,
-        #     min_points=12,
-        # )
-        if pcd_np.shape[0] < 4:
-            raise RuntimeError(
-                f"Not enough denoised points for OBB computation: {pcd_np.shape[0]}"
             )
 
         pcd = torch.from_numpy(pcd_np).float()
@@ -674,24 +636,24 @@ class InferenceTest2(AIRNode):
         )
         obb.color = (1, 0, 0)
 
-        obb_pose_center, obb_pose_rot = compute_obb_pose_with_world_z(
+        obb_center, obb_rot = compute_obb_pose_with_world_z(
             obb,
             pcd_np,
         )
 
         obb_pose = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.08, origin=[0, 0, 0])
-        obb_pose.rotate(obb_pose_rot, center=(0, 0, 0))
-        obb_pose.translate(obb_pose_center)
-        print(f"Bounding Box center: {obb_pose_center}")
+        obb_pose.rotate(obb_rot, center=(0, 0, 0))
+        obb_pose.translate(obb_center)
+        self.get_logger().info(f"Bounding Box center: {obb_center}")
 
         # # Visual marker for bounding box center
         # obb_marker = o3d.geometry.TriangleMesh.create_sphere(radius=0.01)
         # obb_marker.paint_uniform_color((0.5, 0.5, 1.0))  # Purple-ish
-        # obb_marker.translate(obb_pose_center)
+        # obb_marker.translate(obb_center)
 
         # Center of gravity (centroid) of the point cloud (which may have some density bias)
         cog_pcd = np.mean(pcd_np, axis=0)
-        print(f"Point-cloud center of gravity: {cog_pcd}")
+        self.get_logger().info(f"Point-cloud center of gravity: {cog_pcd}")
 
         # # Visual marker for center of gravity
         # cog_pcd_marker = o3d.geometry.TriangleMesh.create_sphere(radius=0.01)
@@ -699,7 +661,7 @@ class InferenceTest2(AIRNode):
         # cog_pcd_marker.translate(cog_pcd)
 
         # The mean of the bounding box center and the point cloud center of gravity, which can be a more balanced estimate of the object center.
-        cog_mean = 0.2 * obb_pose_center + 0.8 * cog_pcd
+        cog_mean = 0.2 * obb_center + 0.8 * cog_pcd
 
         # Visual marker for center of gravity
         cog_mean_marker = o3d.geometry.TriangleMesh.create_sphere(radius=0.01)
@@ -707,7 +669,7 @@ class InferenceTest2(AIRNode):
         cog_mean_marker.translate(cog_mean)
 
         cog_axis = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.06, origin=[0, 0, 0])
-        cog_axis.rotate(obb_pose_rot, center=(0, 0, 0))
+        cog_axis.rotate(obb_rot, center=(0, 0, 0))
         cog_axis.translate(cog_mean)
 
         # ====================================================================
@@ -726,27 +688,23 @@ class InferenceTest2(AIRNode):
             fused_pose=False,
             interactive_vis=True,
             cog=cog_mean,
-            cog_axis=obb_pose_rot,
+            cog_axis=obb_rot,
             cog_axis_projection_th=0.7,
-            ply_path=poses_ply_path,
-            line_resolution=16,
-            line_segment_length=5e-5,
         )
         self.get_logger().info(f"Inference time: {time.time() - t:.3f}s")
 
         if prediction is None:
             self.get_logger().info("No prediction returned.")
-            # ==========================================
-            pcd_vis_test = o3d.geometry.PointCloud()
-            pcd_vis_test.points = o3d.utility.Vector3dVector(pcd_np)
+            pcd_no_prediction = o3d.geometry.PointCloud()
+            pcd_no_prediction.points = o3d.utility.Vector3dVector(pcd_np)
 
-            # Create a coordinate frame for better orientation in the visualization
-            axis_test = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1, origin=[0, 0, 0])
-            o3d.visualization.draw_geometries([pcd_vis_test, axis_test, obb, cog_mean_marker, cog_axis, obb_pose])  
-            # ===============================================
+            # Create a coordinate frame (agv_table_center_link) for better orientation in the visualization
+            agv_center_link_in_base_link = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1, origin=[0, 0, 0])
+            o3d.visualization.draw_geometries([pcd_no_prediction, agv_center_link_in_base_link, obb, cog_mean_marker, cog_axis, obb_pose])  
+
             if pcd_no_pose_ply_path is not None:
-                o3d.io.write_point_cloud(pcd_no_pose_ply_path, pcd_vis_test)
-                print(f"Saved point cloud (no pose) to {pcd_no_pose_ply_path}")
+                o3d.io.write_point_cloud(pcd_no_pose_ply_path, pcd_no_prediction)
+                self.get_logger().info(f"Saved point cloud (no pose) to {pcd_no_pose_ply_path}")
             return
 
         if isinstance(prediction, torch.Tensor):
@@ -767,7 +725,7 @@ class InferenceTest2(AIRNode):
         grasp_translation[1] += grasp_y_offset
         grasp_translation[2] += grasp_z_offset
         
-        self.get_logger().info(f"Predicted translation: {grasp_translation}, quaternion: {grasp_quat}")
+        self.get_logger().info(f"Predicted grasp pose (in base_link): {grasp_translation}, quaternion: {grasp_quat}")
 
         grasp_msg = PoseStamped()
         grasp_msg.header.stamp = self.get_clock().now().to_msg()
@@ -781,92 +739,15 @@ class InferenceTest2(AIRNode):
         grasp_msg.pose.orientation.w = float(grasp_quat[3])
         self.grasp_pose_publisher.publish(grasp_msg)
         self.get_logger().info("Grasp pose published.")
-        
 
-        agv_T_cog = np.eye(4)
-        agv_T_cog[:3, :3] = obb_pose_rot
-        agv_T_cog[:3, 3] = cog_mean
 
-        cog_T_agv = np.linalg.inv(agv_T_cog)
-
-        # agv_T_grasp = prediction
-        base_T_grasp = prediction
-        agv_T_base = np.eye(4)
-        agv_T_base[:3, 3] = np.array([-grasp_x_offset, -grasp_y_offset, -grasp_z_offset])  # agv_table_center_link in base_link
-
-        # cog_T_grasp = cog_T_agv @ agv_T_base @ base_T_grasp
-        # cog_T_grasp = cog_T_agv @ agv_T_grasp
-        cog_T_grasp = cog_T_agv @ agv_T_base @ base_T_grasp
-
-        print(f"cog_T_grasp:\n{cog_T_grasp}")
-        
-        # ============== agv_T_place =======================================
-        # # agv_T_placement_center = self.tf_buffer.lookup_transform(
-        # #     "placement_link",
-        # #     "agv_table_center_link",
-        # #     rclpy.time.Time(),
-        # #     timeout=RclpyDuration(seconds=0.2)
-        # # )
-
-        # agv_to_placement_tf = self.tf_buffer.lookup_transform(
-        #     "agv_table_center_link",
-        #     "placement_link",            
-        #     rclpy.time.Time(),
-        #     timeout=RclpyDuration(seconds=0.2)
-        # )
-        # agv_T_placement_center = transform_to_matrix(agv_to_placement_tf.transform)
-
-        # print(f"agv_T_placement_center:\n{agv_T_placement_center}")
-
-        # # agv_T_place = agv_T_placement_center @ placement_center_T_place
-        # #             = agv_T_placement_center @ cog_T_grasp
-
-        # agv_T_place = agv_T_placement_center @ cog_T_grasp
-        # print(f"agv_T_place:\n{agv_T_place}")
-
-        # place_quat = quaternion_from_matrix(agv_T_place)
-        # place_translation = translation_from_matrix(agv_T_place)
-        # place_translation[0] += grasp_x_offset
-        # place_translation[1] += grasp_y_offset
-        # place_translation[2] += grasp_z_offset
-        
-        # self.get_logger().info(f"Placement pose translation: {place_translation}, quaternion: {place_quat}")
-
-        # place_msg = PoseStamped()
-        # place_msg.header.stamp = self.get_clock().now().to_msg()
-        # place_msg.header.frame_id = "base_link"
-        # place_msg.pose.position.x = float(place_translation[0])
-        # place_msg.pose.position.y = float(place_translation[1])
-        # place_msg.pose.position.z = float(place_translation[2])
-        # place_msg.pose.orientation.x = float(place_quat[0])
-        # place_msg.pose.orientation.y = float(place_quat[1])
-        # place_msg.pose.orientation.z = float(place_quat[2])
-        # place_msg.pose.orientation.w = float(place_quat[3])
-        # self.place_pose_publisher.publish(place_msg)
-        # ========================================================
-
-        # ========placement_center_T_place = cog_T_grasp =====================
-        placement_center_T_place = cog_T_grasp
-
-        place_quat = quaternion_from_matrix(placement_center_T_place)
-        place_translation = translation_from_matrix(placement_center_T_place)
-        self.get_logger().info(f"Placement pose translation: {place_translation}, quaternion: {place_quat}")
-
-        place_msg = PoseStamped()
-        place_msg.header.stamp = self.get_clock().now().to_msg()
-        place_msg.header.frame_id = "placement_link"
-        place_msg.pose.position.x = float(place_translation[0])
-        place_msg.pose.position.y = float(place_translation[1])
-        place_msg.pose.position.z = float(place_translation[2])
-        place_msg.pose.orientation.x = float(place_quat[0])
-        place_msg.pose.orientation.y = float(place_quat[1])
-        place_msg.pose.orientation.z = float(place_quat[2])
-        place_msg.pose.orientation.w = float(place_quat[3])
-        self.place_pose_publisher.publish(place_msg)
-        self.get_logger().info("Place pose published.")
-        # ========================================================
-
-        self._visualize_pose_and_pcd(pcd_np, grasp_msg, save_path=grasp_pose_ply_path)
+        self._visualize_pose_and_pcd(pcd_np, 
+                                     grasp_msg,
+                                     save_pcd=True,
+                                     save_path=grasp_pose_ply_path, 
+                                     grasp_x_offset=grasp_x_offset, 
+                                     grasp_y_offset=grasp_y_offset, 
+                                     grasp_z_offset=grasp_z_offset)
 def main_module(
     args: argparse.Namespace,
     learning: bool = True,

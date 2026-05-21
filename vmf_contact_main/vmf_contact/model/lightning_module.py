@@ -501,21 +501,17 @@ class vmfContactLightningModule(pl.LightningModule):
         sample_num=1,
         graspness_th=0.0,
         grasp_height_th=-0.2,
-        grasp_cog_dist_th=None,
-        grasp_cog_min_dist_th=None,
         pcd_from_prompt=None,
         convention="xzy",
         vis=False,
         interactive_vis=False,
         fused_pose=True,
         integrate = True,
+        grasp_cog_dist_th=None,
+        grasp_cog_min_dist_th=None,
         cog = None,
         cog_axis = None,
-        cog_axis_projection_th = 0.7,
-        obb = None,
-        ply_path = None,
-        line_resolution = 32, 
-        line_segment_length = 2e-3,
+        cog_axis_projection_th = None,
         ):
         if len(pcd) == 0:
             # print("No valid point cloud, skipping inference")
@@ -526,6 +522,8 @@ class vmfContactLightningModule(pl.LightningModule):
         if pcd.dim() == 3:
             pcd = pcd.view(-1, 3)
 
+        # Subsample the point cloud to pcd_num points
+        # default: 20000 (pcd 1080x720 -> 100000 after compute_pcd_base() -> 20000)
         pcd = over_or_re_sample(pcd, pcd_num)
 
         with torch.no_grad():
@@ -539,14 +537,14 @@ class vmfContactLightningModule(pl.LightningModule):
                                                     resize=resize,
                                                     graspness_th=graspness_th,
                                                     grasp_height_th=grasp_height_th,
-                                                    grasp_cog_dist_th=grasp_cog_dist_th,
-                                                    grasp_cog_min_dist_th=grasp_cog_min_dist_th,
-                                                    cog_axis=cog_axis,
-                                                    cog_axis_projection_th=cog_axis_projection_th,
                                                     pcd_from_prompt=pcd_from_prompt,
                                                     uncertainty_estimator=self.uncertainty_estimator,
                                                     integrate = integrate,
+                                                    grasp_cog_dist_th=grasp_cog_dist_th,
+                                                    grasp_cog_min_dist_th=grasp_cog_min_dist_th,
                                                     cog = cog,
+                                                    cog_axis=cog_axis,
+                                                    cog_axis_projection_th=cog_axis_projection_th,
                                                     )
         
 
@@ -554,7 +552,11 @@ class vmfContactLightningModule(pl.LightningModule):
             # print("No valid grasp")
             return None
         if vis:
-            self.grasp_buffer.vis_grasps(pcd_shift = pcd_shift, interactive_vis=interactive_vis, fused_pose=fused_pose, cog = cog, obb = obb, cog_axis = cog_axis, ply_path = ply_path, line_resolution = line_resolution, line_segment_length = line_segment_length)
+            self.grasp_buffer.vis_grasps(pcd_shift = pcd_shift, 
+                                         interactive_vis=interactive_vis, 
+                                         fused_pose=fused_pose, 
+                                         cog = cog, 
+                                         cog_axis = cog_axis)
         
         if fused_pose:
             pose_chosen = self.grasp_buffer.get_pose_fused_best(

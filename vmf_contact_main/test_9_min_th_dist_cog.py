@@ -65,7 +65,7 @@ def denoise_point_cloud(
 
     print(
         f"Denoise: raw={len(points_np)}, "
-        f"after_stat={len(stat_inliers)}, after_radius={len(ra/arm_vmf/place_posedius_inliers)}"
+        f"after_stat={len(stat_inliers)}, after_radius={len(radius_inliers)}"
     )
     return np.asarray(pcd_radius.points), pcd_radius
 
