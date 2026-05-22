@@ -1,8 +1,10 @@
 import argparse
+from datetime import datetime
 import logging
 import os
 from typing import Optional
 import time
+from zoneinfo import ZoneInfo
 import open3d as o3d
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import WandbLogger
@@ -25,11 +27,12 @@ import warnings
 
 logger = logging.getLogger("vmf_contact")
 
-data_path = os.environ.get("LSDFPROJECTS")
-if data_path is None or not os.path.exists(data_path):
-    data_path = ".."
-assert os.path.exists(data_path), f"Data path {data_path} does not exist. Please set it."
-logger.info(f"Current data path: {data_path}")
+def resolve_data_path() -> str:
+    data_path = os.environ.get("LSDFPROJECTS")
+    if data_path is None or not os.path.exists(data_path):
+        data_path = ".."
+    assert os.path.exists(data_path), f"Data path {data_path} does not exist. Please set it."
+    return data_path
 
 def suppress_pytorch_lightning_logs():
     """
@@ -49,7 +52,11 @@ def suppress_pytorch_lightning_logs():
 def get_args_parser(
     description: Optional[str] = None,
     add_help: bool = True,
+    data_path: Optional[str] = None,
 ):
+    if data_path is None:
+        data_path = resolve_data_path()
+
     parser = argparse.ArgumentParser(
         description=description,
         add_help=add_help,
@@ -278,15 +285,14 @@ def get_args_parser(
 
 
 import yaml
-print(f"{data_path}/dataset/vmf_data/data*")
 
-def parse_args_from_yaml(config_path: str = current_dir + "/config.yaml"):
+def parse_args_from_yaml(config_path: str, data_path: Optional[str] = None):
     # Load default configurations from YAML
     with open(config_path, 'r') as f:
         yaml_config = yaml.safe_load(f)
 
     # Create the argument parser
-    parser = get_args_parser()
+    parser = get_args_parser(data_path=data_path)
 
     # Set defaults from YAML file
     parser.set_defaults(**yaml_config)
@@ -474,7 +480,7 @@ class InferenceTest2(AIRNode):
             return pcd
 
         replace = num_points < target_points
-        sampled_indices = np.random.Generator.choice(num_points, size=target_points, replace=replace)
+        sampled_indices = np.random.choice(num_points, size=target_points, replace=replace)
         return pcd[sampled_indices]
 
 
@@ -581,9 +587,10 @@ class InferenceTest2(AIRNode):
         # os.makedirs(default_save_dir, exist_ok=True)
 
         default_save_dir = os.path.dirname(os.path.abspath(__file__))
+        os.makedirs(os.path.join(default_save_dir, "logs"), exist_ok=True)
         
-        grasp_pose_ply_path = os.path.join(default_save_dir, f"{self.output_name}_grasp.ply")
-        pcd_no_pose_ply_path = os.path.join(default_save_dir, f"{self.output_name}_no_pose.ply")
+        grasp_pose_ply_path = os.path.join(default_save_dir, "logs", f"{self.output_name}_grasp.ply")
+        pcd_no_pose_ply_path = os.path.join(default_save_dir, "logs", f"{self.output_name}_no_pose.ply")
         
         # The point cloud pcd_from_saver is already in base_link frame and has shape (N, 3)
         pcd = torch.from_numpy(pcd_from_saver).float()
@@ -669,16 +676,16 @@ class InferenceTest2(AIRNode):
         prediction = self.model.inference(
             pcd.to("cuda"),
             graspness_th=0.3,
-            grasp_height_th=0.005,
-            grasp_cog_dist_th=0.04,
-            grasp_cog_min_dist_th=-0.04,
+            grasp_height_th=0.003,
+            grasp_cog_dist_th=0.05,
+            grasp_cog_min_dist_th=0.03,
             vis=True,
             integrate=False,
             fused_pose=False,
             interactive_vis=True,
             cog=cog_mean,
             cog_axis=obb_rot,
-            cog_axis_projection_th=0.7,
+            cog_axis_projection_th=0.5,
         )
         self.get_logger().info(f"Inference time: {time.time() - t:.3f}s")
 
@@ -708,8 +715,8 @@ class InferenceTest2(AIRNode):
                 f"Model inference returned invalid pose matrix shape {prediction.shape}, expected (4, 4)."
             )
 
-        grasp_quat = quaternion_from_matrix(prediction)
-        grasp_translation = translation_from_matrix(prediction)
+        grasp_quat = np.asarray(quaternion_from_matrix(prediction), dtype=float)
+        grasp_translation = np.asarray(translation_from_matrix(prediction), dtype=float)
         grasp_translation[0] += grasp_x_offset
         grasp_translation[1] += grasp_y_offset
         grasp_translation[2] += grasp_z_offset
@@ -740,7 +747,7 @@ class InferenceTest2(AIRNode):
             "grasp_y_offset": grasp_y_offset,
             "grasp_z_offset": grasp_z_offset,
         }
-        with open(os.path.join(default_save_dir, f"{self.output_name}_meta.json"), "w") as f:
+        with open(os.path.join(default_save_dir, "logs", f"{self.output_name}_meta.json"), "w") as f:
             json.dump(metadata, f, indent=2)
 
         self._visualize_pose_and_pcd(pcd_np, 
@@ -831,12 +838,8 @@ import json
 
 
 def main(args=None):
-    logger.info(torch.__version__)
-    logger.info("Cuda available: %s", torch.cuda.is_available())
-    logger.info("Cuda device number: %s", torch.cuda.device_count())
-
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    log_dir = os.current_dir + "/logs"
+    log_dir = current_dir + "/logs"
     os.makedirs(log_dir, exist_ok=True)
 
     output_name = input(
@@ -846,19 +849,28 @@ def main(args=None):
     if not output_name:
         output_name = time.strftime("vmf_%Y%m%d_%H%M%S")
 
-    log_path = os.path.join(log_dir, f"{output_name}.log")
-    logger.info(f"Logging to {log_path}")
+    # log_path = os.path.join(log_dir, f"{output_name}.log")
+    # logger.info(f"Logging to {log_path}")
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-        handlers=[
-            logging.FileHandler(log_path),
-            logging.StreamHandler(),
-        ],
-        force=True,
-    )
-    parsed_args = parse_args_from_yaml(current_dir + "/config.yaml")
+    # logging.basicConfig(
+    #     level=logging.INFO,
+    #     format="%(asctime)s, +0200 | %(levelname)s | %(name)s | %(message)s",
+    #     handlers=[
+    #         logging.FileHandler(log_path),
+    #         logging.StreamHandler(),
+    #     ],
+    #     force=True,
+    # )
+
+    data_path = resolve_data_path()
+    logger.info("Logging to %s", log_dir)
+    logger.info(torch.__version__)
+    logger.info("Cuda available: %s", torch.cuda.is_available())
+    logger.info("Cuda device number: %s", torch.cuda.device_count())
+    # logger.info("1.Current data path: %s", data_path)
+    # logger.info("2.%s/dataset/vmf_data/data*", data_path)
+
+    parsed_args = parse_args_from_yaml(current_dir + "/config.yaml", data_path=data_path)
     model = main_module(parsed_args)
     # try:
     #     package_dir = get_package_share_directory("robot_grasping")
@@ -870,7 +882,9 @@ def main(args=None):
     # model = main_module(parsed_args)
 
     rclpy.init(args=args)
-    node = InferenceTest2(parsed_args, model, output_name=output_name)
+    node = InferenceTest2(parsed_args, 
+                          model,                          
+                          output_name=output_name)
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
