@@ -16,91 +16,20 @@ if not hasattr(np, "float"):
     np.float = float  # type: ignore[attr-defined]
     
 from tf_transformations import quaternion_from_matrix, translation_from_matrix, quaternion_matrix
-
 from ament_index_python.packages import get_package_share_directory, PackageNotFoundError
-
-current_dir = os.path.dirname(os.path.abspath(__file__))
-sys.path.append(os.path.join(current_dir, '.'))
-parent_dir = os.path.dirname(current_dir)
-if parent_dir not in sys.path:
-    sys.path.append(parent_dir)
-
-import torch
-print(torch.__version__)
-print("Cuda available: ", torch.cuda.is_available())
-print("Cuda device number: ", torch.cuda.device_count())
-
-
-data_path = os.environ.get("LSDFPROJECTS")
-if data_path is None or not os.path.exists(data_path):
-    data_path = ".."
-assert os.path.exists(data_path), f"Data path {data_path} does not exist. Please set it."
-print(f"Current data path: {data_path}")
-
 from vmf_contact import vmfContactModule
 from vmf_contact import DATASET_REGISTRY
 from openpoints.utils import EasyConfig
 import glob
 import warnings
 
+logger = logging.getLogger("vmf_contact")
 
-def compute_obb_pose_with_world_z(
-    obb: o3d.geometry.OrientedBoundingBox,
-    points_np: np.ndarray,
-    world_z: np.ndarray = np.array([0.0, 0.0, 1.0]),
-) -> tuple[np.ndarray, np.ndarray]:
-    ''' Compute a pose for the Oriented Bounding Box (OBB) of a point cloud, 
-
-    with the constraint that the Z-axis of the OBB must be aligned with the given world Z direction,
-    and the x-axis should be oriented such that the positive end of x-axis points towards the side
-    with higher average height (z value) in the point cloud.
-    '''
-    center = np.asarray(obb.center)
-    rot = np.asarray(obb.R)
-    extent = np.asarray(obb.extent)
-
-    axis_order = np.argsort(extent)[::-1]
-    world_z = world_z / np.linalg.norm(world_z)
-
-    x_axis = None
-    for axis_idx in axis_order:
-        candidate = rot[:, axis_idx]
-        candidate = candidate - np.dot(candidate, world_z) * world_z
-        candidate_norm = np.linalg.norm(candidate)
-        if candidate_norm > 1e-8:
-            x_axis = candidate / candidate_norm
-            break
-
-    if x_axis is None:
-        x_axis = np.array([1.0, 0.0, 0.0])
-
-    centered_points = points_np - center
-    points_along_x = centered_points @ x_axis
-    span_along_x = np.max(np.abs(points_along_x))
-
-    if span_along_x > 1e-8:
-        end_band_threshold = 0.6 * span_along_x
-        pos_end_points = points_np[points_along_x >= end_band_threshold]
-        neg_end_points = points_np[points_along_x <= -end_band_threshold]
-
-        if len(pos_end_points) > 0 and len(neg_end_points) > 0:
-            pos_mean_height = np.mean(pos_end_points[:, 2])
-            neg_mean_height = np.mean(neg_end_points[:, 2])
-            if neg_mean_height > pos_mean_height:
-                x_axis = -x_axis
-
-    z_axis = world_z
-
-    y_axis = np.cross(z_axis, x_axis)
-    y_axis_norm = np.linalg.norm(y_axis)
-    if y_axis_norm <= 1e-8:
-        y_axis = np.array([0.0, 1.0, 0.0])
-    else:
-        y_axis /= y_axis_norm
-    
-
-    constrained_rot = np.column_stack((x_axis, y_axis, z_axis))
-    return center, constrained_rot
+data_path = os.environ.get("LSDFPROJECTS")
+if data_path is None or not os.path.exists(data_path):
+    data_path = ".."
+assert os.path.exists(data_path), f"Data path {data_path} does not exist. Please set it."
+logger.info(f"Current data path: {data_path}")
 
 def suppress_pytorch_lightning_logs():
     """
@@ -114,7 +43,7 @@ def suppress_pytorch_lightning_logs():
     warnings.filterwarnings("ignore", ".*It is recommended to use.*")
     logging.getLogger("pytorch_lightning").setLevel(logging.ERROR)
 
-logger = logging.getLogger(__name__)
+
 
 
 def get_args_parser(
@@ -382,12 +311,18 @@ class InferenceTest2(AIRNode):
     runs inference once, publishes the pose, then shuts down.
     """
 
-    def __init__(self, args: argparse.Namespace, model: torch.nn.Module):
+    def __init__(
+        self,
+        args: argparse.Namespace,
+        model: torch.nn.Module,
+        output_name: Optional[str] = None,
+    ):
         super().__init__()
         self.args = args
         self.model = model
+        self.output_name = output_name
         self.grasp_pose_publisher = self.create_publisher(PoseStamped, "/arm_vmf/pose_chosen", 10)
-        self.place_pose_publisher = self.create_publisher(PoseStamped, "/arm_vmf/place_pose", 10)
+        # self.place_pose_publisher = self.create_publisher(PoseStamped, "/arm_vmf/place_pose", 10)
         self.inference_done = False
         self._tf_wait_logged = False
         self.get_logger().info("Waiting for depth + camera info...")
@@ -474,6 +409,64 @@ class InferenceTest2(AIRNode):
         pcd_base = transform_points(pcd, t.transform)
         self.get_logger().info(f"Shape of pcd_base: {pcd_base.shape}")
         return pcd_base
+
+    def compute_obb_pose_with_world_z(
+        self,
+        obb: o3d.geometry.OrientedBoundingBox,
+        points_np: np.ndarray,
+        world_z: np.ndarray = np.array([0.0, 0.0, 1.0]),
+    ) -> tuple[np.ndarray, np.ndarray]:
+        ''' Compute a pose for the Oriented Bounding Box (OBB) of a point cloud,
+
+        with the constraint that the Z-axis of the OBB must be aligned with the given world Z direction,
+        and the x-axis should be oriented such that the positive end of x-axis points towards the side
+        with higher average height (z value) in the point cloud.
+        '''
+        center = np.asarray(obb.center)
+        rot = np.asarray(obb.R)
+        extent = np.asarray(obb.extent)
+
+        axis_order = np.argsort(extent)[::-1]
+        world_z = world_z / np.linalg.norm(world_z)
+
+        x_axis = None
+        for axis_idx in axis_order:
+            candidate = rot[:, axis_idx]
+            candidate = candidate - np.dot(candidate, world_z) * world_z
+            candidate_norm = np.linalg.norm(candidate)
+            if candidate_norm > 1e-8:
+                x_axis = candidate / candidate_norm
+                break
+
+        if x_axis is None:
+            x_axis = np.array([1.0, 0.0, 0.0])
+
+        centered_points = points_np - center
+        points_along_x = centered_points @ x_axis
+        span_along_x = np.max(np.abs(points_along_x))
+
+        if span_along_x > 1e-8:
+            end_band_threshold = 0.6 * span_along_x
+            pos_end_points = points_np[points_along_x >= end_band_threshold]
+            neg_end_points = points_np[points_along_x <= -end_band_threshold]
+
+            if len(pos_end_points) > 0 and len(neg_end_points) > 0:
+                pos_mean_height = np.mean(pos_end_points[:, 2])
+                neg_mean_height = np.mean(neg_end_points[:, 2])
+                if neg_mean_height > pos_mean_height:
+                    x_axis = -x_axis
+
+        z_axis = world_z
+
+        y_axis = np.cross(z_axis, x_axis)
+        y_axis_norm = np.linalg.norm(y_axis)
+        if y_axis_norm <= 1e-8:
+            y_axis = np.array([0.0, 1.0, 0.0])
+        else:
+            y_axis /= y_axis_norm
+
+        constrained_rot = np.column_stack((x_axis, y_axis, z_axis))
+        return center, constrained_rot
 
     def _resample_pointcloud(self, pcd: np.ndarray, target_points: int = 40000) -> np.ndarray:
         num_points = pcd.shape[0]
@@ -584,17 +577,13 @@ class InferenceTest2(AIRNode):
     def run_inference_once(self, pcd_from_saver: np.ndarray) -> None:
         t = time.time()
         
-        default_save_dir = "/home/jetson/wbk_ur10_ws/src/vmf"
-        name = input(
-            'Enter a name for the visualization: \n'
-            'Name convention is "<input>_grasp.ply" or "<input>_no_pose.ply" \n '
-        ).strip()
+        # default_save_dir = "/home/jetson/wbk_ur10_ws/src/vmf"
+        # os.makedirs(default_save_dir, exist_ok=True)
 
-        if not name:
-            name = time.strftime("vmf_%Y%m%d_%H%M%S")
-        os.makedirs(default_save_dir, exist_ok=True)
-        grasp_pose_ply_path = os.path.join(default_save_dir, f"{name}_grasp.ply")
-        pcd_no_pose_ply_path = os.path.join(default_save_dir, f"{name}_no_pose.ply")
+        default_save_dir = os.path.dirname(os.path.abspath(__file__))
+        
+        grasp_pose_ply_path = os.path.join(default_save_dir, f"{self.output_name}_grasp.ply")
+        pcd_no_pose_ply_path = os.path.join(default_save_dir, f"{self.output_name}_no_pose.ply")
         
         # The point cloud pcd_from_saver is already in base_link frame and has shape (N, 3)
         pcd = torch.from_numpy(pcd_from_saver).float()
@@ -636,7 +625,7 @@ class InferenceTest2(AIRNode):
         )
         obb.color = (1, 0, 0)
 
-        obb_center, obb_rot = compute_obb_pose_with_world_z(
+        obb_center, obb_rot = self.compute_obb_pose_with_world_z(
             obb,
             pcd_np,
         )
@@ -740,6 +729,19 @@ class InferenceTest2(AIRNode):
         self.grasp_pose_publisher.publish(grasp_msg)
         self.get_logger().info("Grasp pose published.")
 
+        metadata = {
+            "inference_time_s": time.time() - t,
+            "obb_center": obb_center.tolist(),
+            "cog_pcd": cog_pcd.tolist(),
+            "cog_mean": cog_mean.tolist(),
+            "grasp_translation": grasp_translation.tolist(),
+            "grasp_quaternion": grasp_quat.tolist(),
+            "grasp_x_offset": grasp_x_offset,
+            "grasp_y_offset": grasp_y_offset,
+            "grasp_z_offset": grasp_z_offset,
+        }
+        with open(os.path.join(default_save_dir, f"{self.output_name}_meta.json"), "w") as f:
+            json.dump(metadata, f, indent=2)
 
         self._visualize_pose_and_pcd(pcd_np, 
                                      grasp_msg,
@@ -824,9 +826,39 @@ def main_module(
 
     return model
 
+from pathlib import Path
+import json
+
+
 def main(args=None):
-    current_file_folder = os.path.dirname(os.path.abspath(__file__))
-    parsed_args = parse_args_from_yaml(current_file_folder + "/config.yaml")
+    logger.info(torch.__version__)
+    logger.info("Cuda available: %s", torch.cuda.is_available())
+    logger.info("Cuda device number: %s", torch.cuda.device_count())
+
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    log_dir = os.current_dir + "/logs"
+    os.makedirs(log_dir, exist_ok=True)
+
+    output_name = input(
+        'Enter a name for the visualization: \n'
+        'Name convention is "<input>_grasp.ply" or "<input>_no_pose.ply" \n '
+    ).strip()
+    if not output_name:
+        output_name = time.strftime("vmf_%Y%m%d_%H%M%S")
+
+    log_path = os.path.join(log_dir, f"{output_name}.log")
+    logger.info(f"Logging to {log_path}")
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+        handlers=[
+            logging.FileHandler(log_path),
+            logging.StreamHandler(),
+        ],
+        force=True,
+    )
+    parsed_args = parse_args_from_yaml(current_dir + "/config.yaml")
     model = main_module(parsed_args)
     # try:
     #     package_dir = get_package_share_directory("robot_grasping")
@@ -838,7 +870,7 @@ def main(args=None):
     # model = main_module(parsed_args)
 
     rclpy.init(args=args)
-    node = InferenceTest2(parsed_args, model)
+    node = InferenceTest2(parsed_args, model, output_name=output_name)
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
