@@ -675,10 +675,10 @@ class InferenceTest2(AIRNode):
 
         prediction = self.model.inference(
             pcd.to("cuda"),
-            graspness_th=0.3,
-            grasp_height_th=0.003,
-            grasp_cog_dist_th=0.05,
-            grasp_cog_min_dist_th=0.03,
+            graspness_th=0.2,
+            grasp_height_th=0.0025,
+            grasp_cog_dist_th=0.04,
+            grasp_cog_min_dist_th=0.028,
             vis=True,
             integrate=False,
             fused_pose=False,
