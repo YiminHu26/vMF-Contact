@@ -613,7 +613,7 @@ class InferenceTest2(AIRNode):
         pcd = (pcd.view(-1, 3) - pcd_shift) / pcd_resize
 
         pcd = pcd[(pcd[:, 0] > -0.3) & (pcd[:, 0] < 0.4)]
-        pcd = pcd[(pcd[:, 1] > -0.4) & (pcd[:, 1] < 0.3)]
+        pcd = pcd[(pcd[:, 1] > -0.4) & (pcd[:, 1] < 0.4)]
         pcd = pcd[(pcd[:, 2] > -0.01) & (pcd[:, 2] < 0.3)] # 40000 front distant high foam reversed 20260519
 
         pcd_np = pcd.detach().cpu().numpy()
@@ -676,9 +676,9 @@ class InferenceTest2(AIRNode):
         prediction = self.model.inference(
             pcd.to("cuda"),
             graspness_th=0.2,
-            grasp_height_th=0.0025,
-            grasp_cog_dist_th=0.04,
-            grasp_cog_min_dist_th=0.028,
+            grasp_height_th=0.0020,
+            grasp_cog_dist_th=0.035,
+            grasp_cog_min_dist_th=0.02,
             vis=True,
             integrate=False,
             fused_pose=False,
