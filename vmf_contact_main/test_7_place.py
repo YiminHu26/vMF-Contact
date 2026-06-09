@@ -658,7 +658,7 @@ class InferenceTest2(AIRNode):
             pcd.to("cuda"),
             graspness_th=0.6,
             grasp_height_th=0.0,
-            grasp_cog_dist_th=0.05,
+            grasp_cog_max_dist_th=0.05,
             vis=True,
             integrate=False,
             fused_pose=False,

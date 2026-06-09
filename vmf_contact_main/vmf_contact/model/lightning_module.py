@@ -507,15 +507,23 @@ class vmfContactLightningModule(pl.LightningModule):
         interactive_vis=False,
         fused_pose=True,
         integrate = True,
-        grasp_cog_dist_th=None,
+        use_cog_filter=True,
+        grasp_cog_max_dist_th=None,
         grasp_cog_min_dist_th=None,
         cog = None,
         cog_axis = None,
-        cog_axis_projection_th = None,
+        cog_axis_projection_th = 0.7,
         ):
         if len(pcd) == 0:
             # print("No valid point cloud, skipping inference")
             return None
+
+        if not use_cog_filter:
+            grasp_cog_max_dist_th = None
+            grasp_cog_min_dist_th = None
+            cog = None
+            cog_axis = None
+            cog_axis_projection_th = None
         
         pcd = torch.tensor(pcd, device=self.device, dtype=torch.float32)
         assert pcd.size(-1) == 3
@@ -540,7 +548,7 @@ class vmfContactLightningModule(pl.LightningModule):
                                                     pcd_from_prompt=pcd_from_prompt,
                                                     uncertainty_estimator=self.uncertainty_estimator,
                                                     integrate = integrate,
-                                                    grasp_cog_dist_th=grasp_cog_dist_th,
+                                                    grasp_cog_max_dist_th=grasp_cog_max_dist_th,
                                                     grasp_cog_min_dist_th=grasp_cog_min_dist_th,
                                                     cog = cog,
                                                     cog_axis=cog_axis,

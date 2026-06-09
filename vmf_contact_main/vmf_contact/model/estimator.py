@@ -162,16 +162,17 @@ class vmfContactModule():
         sample_num=1,
         graspness_th=0.0,
         grasp_height_th=-0.2,
-        grasp_cog_dist_th=None,
-        grasp_cog_min_dist_th=None,
         pcd_from_prompt=None,
         convention="xzy",
         vis=False,
         interactive_vis=False,
         fused_pose=True,
         integrate=True,
+        use_cog_filter=True,
+        grasp_cog_max_dist_th=None,
+        grasp_cog_min_dist_th=None,
         cog=None,
-        cog_axis = None,
+        cog_axis=None,
         cog_axis_projection_th=0.7,
     ):
         """
@@ -179,6 +180,13 @@ class vmfContactModule():
         """
         if not hasattr(self, "model_"):
             raise RuntimeError("Estimator model is not loaded. Call module_loader()/fit() first.")
+
+        if not use_cog_filter:
+            grasp_cog_max_dist_th = None
+            grasp_cog_min_dist_th = None
+            cog = None
+            cog_axis = None
+            cog_axis_projection_th = None
 
         return self.model_.inference(
             pcd,
@@ -188,7 +196,7 @@ class vmfContactModule():
             sample_num=sample_num,
             graspness_th=graspness_th,
             grasp_height_th=grasp_height_th,
-            grasp_cog_dist_th=grasp_cog_dist_th,
+            grasp_cog_max_dist_th=grasp_cog_max_dist_th,
             grasp_cog_min_dist_th=grasp_cog_min_dist_th,
             pcd_from_prompt=pcd_from_prompt,
             convention=convention,
@@ -196,6 +204,7 @@ class vmfContactModule():
             interactive_vis=interactive_vis,
             fused_pose=fused_pose,
             integrate=integrate,
+            use_cog_filter=use_cog_filter,
             cog=cog,
             cog_axis=cog_axis,
             cog_axis_projection_th=cog_axis_projection_th,
