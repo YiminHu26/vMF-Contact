@@ -681,12 +681,12 @@ class InferenceTest2(AIRNode):
             integrate=False,
             fused_pose=False,
             interactive_vis=True,
-            # ====CoG-based filtering parameters====
-            use_cog_filter=True,
-            grasp_cog_max_dist_th=0.035,
-            grasp_cog_min_dist_th=0.02,
+            grasp_cog_max_dist_th=0.025,
+            grasp_cog_min_dist_th=0.01,
             cog=cog_mean,
             cog_axis=obb_rot,
+            # ====CoG-based filtering parameters====
+            use_cog_filter=True,
             cog_axis_projection_th=0.5,
             # ====Reachable grasp filtering parameters====
             use_reachable_grasp_filter=False,

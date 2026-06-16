@@ -184,15 +184,22 @@ class vmfContactModule():
         if not hasattr(self, "model_"):
             raise RuntimeError("Estimator model is not loaded. Call module_loader()/fit() first.")
 
-        if not use_cog_filter:
+        if use_cog_filter and use_reachable_grasp_filter:
+            raise ValueError("use_cog_filter and use_reachable_grasp_filter cannot both be True")
+
+        if not use_cog_filter and not use_reachable_grasp_filter:
             grasp_cog_max_dist_th = None
             grasp_cog_min_dist_th = None
             cog = None
             cog_axis = None
             cog_axis_projection_th = None
-
-        if not use_reachable_grasp_filter:
             base_x_axis = None
+            grasp_axis_projection_th = None
+        elif use_cog_filter:
+            base_x_axis = None
+            grasp_axis_projection_th = None
+        else:
+            cog_axis_projection_th = None
 
         return self.model_.inference(
             pcd,

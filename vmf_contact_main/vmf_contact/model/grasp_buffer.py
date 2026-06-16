@@ -150,6 +150,7 @@ class GraspBuffer:
                     prob_baseline="likelihood",
                     uncertainty_estimator=None,
                     integrate=False,
+                    use_cog_filter=True,
                     cog=None,
                     base_x_axis=None,
                     grasp_axis_projection_th=0.0,
@@ -202,6 +203,7 @@ class GraspBuffer:
                                 cog_axis_projection_th = cog_axis_projection_th,
                                 pcd_from_prompt = pcd_from_prompt,
                                 integrate = integrate,
+                                use_cog_filter = use_cog_filter,
                                 cog = cog,
                                 base_x_axis = base_x_axis,
                                 grasp_axis_projection_th = grasp_axis_projection_th,
@@ -222,6 +224,7 @@ class GraspBuffer:
                cog_axis_projection_th=0.7,
                pcd_from_prompt=None,
                integrate=False,
+               use_cog_filter=True,
                cog=None,
                base_x_axis=None,
                grasp_axis_projection_th=0.0,
@@ -260,19 +263,20 @@ class GraspBuffer:
             if grasp_cog_min_dist_th is not None:
                 filter = filter & (midpoint_to_cog_dist > grasp_cog_min_dist_th)
 
-        if cog_axis is not None:
+        if cog is not None and cog_axis is not None:
+            filter = filter & self.filter_grasps_by_positive_cog_x_axis(
+                0.5 * (cp + cp2),
+                cog,
+                cog_axis,
+            )
+
+        if use_cog_filter and cog_axis is not None:
             filter = filter & self.filter_grasps_by_cog_axis(
                 baseline,
                 approach,
                 cog_axis,
                 cog_axis_projection_th,
             )
-            if cog is not None:
-                filter = filter & self.filter_grasps_by_positive_cog_x_axis(
-                    0.5 * (cp + cp2),
-                    cog,
-                    cog_axis,
-                )
 
         if pcd_from_prompt is not None:
             filter = filter & self.filter_grasps_by_pcd(cp, pcd_from_prompt)

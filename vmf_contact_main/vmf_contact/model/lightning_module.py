@@ -507,12 +507,12 @@ class vmfContactLightningModule(pl.LightningModule):
         interactive_vis=False,
         fused_pose=True,
         integrate = True,
-        # CoG-based filtering parameters
-        use_cog_filter=True,
         grasp_cog_max_dist_th=None,
         grasp_cog_min_dist_th=None,
         cog = None,
         cog_axis = None,
+        # CoG-based filtering parameters
+        use_cog_filter=True,
         cog_axis_projection_th = 0.7,
         # Reachable grasp filtering parameters
         use_reachable_grasp_filter=False,
@@ -523,15 +523,22 @@ class vmfContactLightningModule(pl.LightningModule):
             # print("No valid point cloud, skipping inference")
             return None
 
-        if not use_cog_filter:
+        if use_cog_filter and use_reachable_grasp_filter:
+            raise ValueError("use_cog_filter and use_reachable_grasp_filter cannot both be True")
+
+        if not use_cog_filter and not use_reachable_grasp_filter:
             grasp_cog_max_dist_th = None
             grasp_cog_min_dist_th = None
             cog = None
             cog_axis = None
             cog_axis_projection_th = None
-
-        if not use_reachable_grasp_filter:
             base_x_axis = None
+            grasp_axis_projection_th = None
+        elif use_cog_filter:
+            base_x_axis = None
+            grasp_axis_projection_th = None
+        else:
+            cog_axis_projection_th = None
         
         pcd = torch.tensor(pcd, device=self.device, dtype=torch.float32)
         assert pcd.size(-1) == 3
@@ -556,6 +563,7 @@ class vmfContactLightningModule(pl.LightningModule):
                                                     pcd_from_prompt=pcd_from_prompt,
                                                     uncertainty_estimator=self.uncertainty_estimator,
                                                     integrate = integrate,
+                                                    use_cog_filter=use_cog_filter,
                                                     grasp_cog_max_dist_th=grasp_cog_max_dist_th,
                                                     grasp_cog_min_dist_th=grasp_cog_min_dist_th,
                                                     cog = cog,
@@ -580,14 +588,14 @@ class vmfContactLightningModule(pl.LightningModule):
             pose_chosen = self.grasp_buffer.get_pose_fused_best(
                 convention=convention,
                 sample_num=sample_num,
-                cog_axis=cog_axis,
+                cog_axis=cog_axis if use_cog_filter else None,
                 cog_axis_projection_th=cog_axis_projection_th,
             )
         else:
             pose_chosen = self.grasp_buffer.get_pose_curr_best(
                 convention=convention,
                 sample_num=sample_num,
-                cog_axis=cog_axis,
+                cog_axis=cog_axis if use_cog_filter else None,
                 cog_axis_projection_th=cog_axis_projection_th,
             )
         
