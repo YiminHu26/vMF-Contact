@@ -493,11 +493,11 @@ class vmfContactLightningModule(pl.LightningModule):
         # Make layers Lipschitz continuous
         self.losses["flow_loss"] = loss / self.batch_size * self.flow_loss_coeff
 
-    def inference(self, 
-        pcd, 
+    def inference(self,
+        pcd,
         pcd_num = 20000,
         pcd_shift=0.0,
-        resize=1.0, 
+        resize=1.0,
         sample_num=1,
         graspness_th=0.0,
         grasp_height_th=-0.2,
@@ -507,12 +507,17 @@ class vmfContactLightningModule(pl.LightningModule):
         interactive_vis=False,
         fused_pose=True,
         integrate = True,
+        # CoG-based filtering parameters
         use_cog_filter=True,
         grasp_cog_max_dist_th=None,
         grasp_cog_min_dist_th=None,
         cog = None,
         cog_axis = None,
         cog_axis_projection_th = 0.7,
+        # Reachable grasp filtering parameters
+        use_reachable_grasp_filter=False,
+        base_x_axis=None,
+        grasp_axis_projection_th=0.0,
         ):
         if len(pcd) == 0:
             # print("No valid point cloud, skipping inference")
@@ -524,6 +529,9 @@ class vmfContactLightningModule(pl.LightningModule):
             cog = None
             cog_axis = None
             cog_axis_projection_th = None
+
+        if not use_reachable_grasp_filter:
+            base_x_axis = None
         
         pcd = torch.tensor(pcd, device=self.device, dtype=torch.float32)
         assert pcd.size(-1) == 3
@@ -540,7 +548,7 @@ class vmfContactLightningModule(pl.LightningModule):
             out = self.model(pcd)
         
         valid_grasp = self.grasp_buffer.push_buffer(pcd,
-                                                    out, 
+                                                    out,
                                                     pcd_shift=pcd_shift,
                                                     resize=resize,
                                                     graspness_th=graspness_th,
@@ -553,6 +561,8 @@ class vmfContactLightningModule(pl.LightningModule):
                                                     cog = cog,
                                                     cog_axis=cog_axis,
                                                     cog_axis_projection_th=cog_axis_projection_th,
+                                                    base_x_axis=base_x_axis,
+                                                    grasp_axis_projection_th=grasp_axis_projection_th,
                                                     )
         
 

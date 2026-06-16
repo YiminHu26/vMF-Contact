@@ -681,12 +681,17 @@ class InferenceTest2(AIRNode):
             integrate=False,
             fused_pose=False,
             interactive_vis=True,
+            # ====CoG-based filtering parameters====
             use_cog_filter=True,
             grasp_cog_max_dist_th=0.035,
             grasp_cog_min_dist_th=0.02,
             cog=cog_mean,
             cog_axis=obb_rot,
             cog_axis_projection_th=0.5,
+            # ====Reachable grasp filtering parameters====
+            use_reachable_grasp_filter=False,
+            base_x_axis=np.array([0.0, 1.0, 0.0]), # y axis of the world, which is the frontal direction of the robot
+            grasp_axis_projection_th=0.0,
         )
         self.get_logger().info(f"Inference time: {time.time() - t:.3f}s")
 

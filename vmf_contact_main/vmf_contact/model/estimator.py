@@ -174,6 +174,9 @@ class vmfContactModule():
         cog=None,
         cog_axis=None,
         cog_axis_projection_th=0.7,
+        use_reachable_grasp_filter=False,
+        base_x_axis=None,
+        grasp_axis_projection_th=0.0,
     ):
         """
         Runs grasp inference through the loaded Lightning module.
@@ -187,6 +190,9 @@ class vmfContactModule():
             cog = None
             cog_axis = None
             cog_axis_projection_th = None
+
+        if not use_reachable_grasp_filter:
+            base_x_axis = None
 
         return self.model_.inference(
             pcd,
@@ -208,6 +214,9 @@ class vmfContactModule():
             cog=cog,
             cog_axis=cog_axis,
             cog_axis_projection_th=cog_axis_projection_th,
+            use_reachable_grasp_filter=use_reachable_grasp_filter,
+            base_x_axis=base_x_axis,
+            grasp_axis_projection_th=grasp_axis_projection_th,
         )
 
     # ---------------------------------------------------------------------------------------------

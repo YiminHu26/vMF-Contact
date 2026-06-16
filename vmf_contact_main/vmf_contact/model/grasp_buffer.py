@@ -135,13 +135,13 @@ class GraspBuffer:
         else:
             self.update_vis(vis_list)
 
-    def push_buffer(self, 
+    def push_buffer(self,
                     pcd,
-                    out, 
-                    pcd_shift=0., 
-                    resize=1.0, 
+                    out,
+                    pcd_shift=0.,
+                    resize=1.0,
                     graspness_th = 0.0,
-                    grasp_height_th = -0.2, 
+                    grasp_height_th = -0.2,
                     grasp_cog_max_dist_th = None,
                     grasp_cog_min_dist_th = None,
                     cog_axis = None,
@@ -151,6 +151,8 @@ class GraspBuffer:
                     uncertainty_estimator=None,
                     integrate=False,
                     cog=None,
+                    base_x_axis=None,
+                    grasp_axis_projection_th=0.0,
                     ):
         predictions = {}
         predictions["contact_point"] = out["contact_point"].squeeze(0)
@@ -187,13 +189,13 @@ class GraspBuffer:
         predictions["graspness"] = out["graspness"].float().squeeze(0).sigmoid()
 
         # update the grasp buffer
-        valid_grasp = self.update(pcd, 
+        valid_grasp = self.update(pcd,
                                 predictions,
                                 pcd_shift,
                                 resize,
                                 # threshold for filtering out invalid grasps
-                                grasp_height_th = grasp_height_th, 
-                                graspness_th = graspness_th, 
+                                grasp_height_th = grasp_height_th,
+                                graspness_th = graspness_th,
                                 grasp_cog_max_dist_th = grasp_cog_max_dist_th,
                                 grasp_cog_min_dist_th = grasp_cog_min_dist_th,
                                 cog_axis = cog_axis,
@@ -201,17 +203,19 @@ class GraspBuffer:
                                 pcd_from_prompt = pcd_from_prompt,
                                 integrate = integrate,
                                 cog = cog,
+                                base_x_axis = base_x_axis,
+                                grasp_axis_projection_th = grasp_axis_projection_th,
                                 )
         return valid_grasp
 
-    def update(self, 
-               pcds, 
+    def update(self,
+               pcds,
                predictions,
                pcd_shift=0.0,
-               resize=1.0, 
-               grasp_height_th=-.2, 
-               grasp_width_th=0.2, 
-               graspness_th=0.0, 
+               resize=1.0,
+               grasp_height_th=0.2,
+               grasp_width_th=0.2,
+               graspness_th=0.0,
                grasp_cog_max_dist_th=None,
                grasp_cog_min_dist_th=None,
                cog_axis=None,
@@ -219,6 +223,8 @@ class GraspBuffer:
                pcd_from_prompt=None,
                integrate=False,
                cog=None,
+               base_x_axis=None,
+               grasp_axis_projection_th=0.0,
                ):     
         
         if not isinstance(pcd_shift, torch.Tensor):
@@ -271,6 +277,10 @@ class GraspBuffer:
         if pcd_from_prompt is not None:
             filter = filter & self.filter_grasps_by_pcd(cp, pcd_from_prompt)
 
+        if base_x_axis is not None:
+            filter = filter & self.filter_grasps_by_reachable(
+                baseline, approach, base_x_axis, grasp_axis_projection_th
+            )
 
         if filter.sum() == 0:
             return False
@@ -706,11 +716,27 @@ class GraspBuffer:
         '''
         Filter grasps based on the projection of the grasp y-axis (cross product of approach and baseline, i.e. from tcp to camera) onto the given COG axis.
         (cog_axis: actually the cog x_axis,  which should be aligned with the angle grinder's main direction, i.e. the direction from the handle to the disc)
-        
+
         Grasps with a projection above the specified threshold are considered valid.
-        '''        
-        
+        '''
+
         cog_axis = self._cog_x_axis_tensor(cog_axis, baseline.device, baseline.dtype)
         grasp_y_axis = torch.nn.functional.normalize(torch.linalg.cross(approach, baseline), dim=-1)
         projection = torch.sum(grasp_y_axis * cog_axis, dim=-1)
         return projection > cog_axis_projection_th
+
+    def filter_grasps_by_reachable(self, baseline, approach, base_x_axis, grasp_axis_projection_th=0.0):
+        '''
+        Filter grasps by reachability: keep only grasps where the included angle between
+        the grasp y-axis (cross product of approach and baseline) and the x-axis of the
+        "base" link is between -pi/2 and pi/2 (i.e., dot product > grasp_axis_projection_th).
+        '''
+        if not isinstance(base_x_axis, torch.Tensor):
+            base_x_axis = torch.tensor(base_x_axis, device=baseline.device, dtype=baseline.dtype)
+        else:
+            base_x_axis = base_x_axis.to(device=baseline.device, dtype=baseline.dtype)
+        base_x_axis = torch.nn.functional.normalize(base_x_axis.reshape(3), dim=-1)
+
+        grasp_y_axis = torch.nn.functional.normalize(torch.linalg.cross(approach, baseline), dim=-1)
+        projection = torch.sum(grasp_y_axis * base_x_axis, dim=-1)
+        return projection > grasp_axis_projection_th
