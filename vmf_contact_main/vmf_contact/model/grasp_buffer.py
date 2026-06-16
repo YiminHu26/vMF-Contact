@@ -152,7 +152,7 @@ class GraspBuffer:
                     integrate=False,
                     use_cog_filter=True,
                     cog=None,
-                    base_x_axis=None,
+                    world_y_axis=None,
                     grasp_axis_projection_th=0.0,
                     ):
         predictions = {}
@@ -205,7 +205,7 @@ class GraspBuffer:
                                 integrate = integrate,
                                 use_cog_filter = use_cog_filter,
                                 cog = cog,
-                                base_x_axis = base_x_axis,
+                                world_y_axis = world_y_axis,
                                 grasp_axis_projection_th = grasp_axis_projection_th,
                                 )
         return valid_grasp
@@ -226,7 +226,7 @@ class GraspBuffer:
                integrate=False,
                use_cog_filter=True,
                cog=None,
-               base_x_axis=None,
+               world_y_axis=None,
                grasp_axis_projection_th=0.0,
                ):     
         
@@ -281,9 +281,9 @@ class GraspBuffer:
         if pcd_from_prompt is not None:
             filter = filter & self.filter_grasps_by_pcd(cp, pcd_from_prompt)
 
-        if base_x_axis is not None:
+        if world_y_axis is not None:
             filter = filter & self.filter_grasps_by_reachable(
-                baseline, approach, base_x_axis, grasp_axis_projection_th
+                baseline, approach, world_y_axis, grasp_axis_projection_th
             )
 
         if filter.sum() == 0:
@@ -707,6 +707,11 @@ class GraspBuffer:
         return cog_axis / cog_axis_norm
 
     def filter_grasps_by_positive_cog_x_axis(self, grasp_points, cog, cog_axis):
+        ''' Filter grasps based on whether the grasp points are in the positive direction of the COG x-axis.
+        This is to ensure that the grasps are approaching the object from the correct side, e.g. for angle grinder, 
+        we want the grasps to approach from the side of the handle instead of the disc.
+        
+        '''
         if not isinstance(cog, torch.Tensor):
             cog = torch.tensor(cog, device=grasp_points.device, dtype=grasp_points.dtype)
         else:
@@ -729,18 +734,18 @@ class GraspBuffer:
         projection = torch.sum(grasp_y_axis * cog_axis, dim=-1)
         return projection > cog_axis_projection_th
 
-    def filter_grasps_by_reachable(self, baseline, approach, base_x_axis, grasp_axis_projection_th=0.0):
+    def filter_grasps_by_reachable(self, baseline, approach, world_y_axis, grasp_axis_projection_th=0.0):
         '''
         Filter grasps by reachability: keep only grasps where the included angle between
-        the grasp y-axis (cross product of approach and baseline) and the x-axis of the
-        "base" link is between -pi/2 and pi/2 (i.e., dot product > grasp_axis_projection_th).
+        the physical grasp y-axis (cross product of baseline and approach) and the y-axis of the
+        world frame is between -pi/2 and pi/2 (i.e., dot product > grasp_axis_projection_th).
         '''
-        if not isinstance(base_x_axis, torch.Tensor):
-            base_x_axis = torch.tensor(base_x_axis, device=baseline.device, dtype=baseline.dtype)
+        if not isinstance(world_y_axis, torch.Tensor):
+            world_y_axis = torch.tensor(world_y_axis, device=baseline.device, dtype=baseline.dtype)
         else:
-            base_x_axis = base_x_axis.to(device=baseline.device, dtype=baseline.dtype)
-        base_x_axis = torch.nn.functional.normalize(base_x_axis.reshape(3), dim=-1)
+            world_y_axis = world_y_axis.to(device=baseline.device, dtype=baseline.dtype)
+        world_y_axis = torch.nn.functional.normalize(world_y_axis.reshape(3), dim=-1)
 
         grasp_y_axis = torch.nn.functional.normalize(torch.linalg.cross(approach, baseline), dim=-1)
-        projection = torch.sum(grasp_y_axis * base_x_axis, dim=-1)
+        projection = torch.sum(grasp_y_axis * world_y_axis, dim=-1)
         return projection > grasp_axis_projection_th

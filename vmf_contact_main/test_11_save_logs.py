@@ -682,15 +682,15 @@ class InferenceTest2(AIRNode):
             fused_pose=False,
             interactive_vis=True,
             grasp_cog_max_dist_th=0.025,
-            grasp_cog_min_dist_th=0.01,
+            grasp_cog_min_dist_th=0.0,
             cog=cog_mean,
             cog_axis=obb_rot,
             # ====CoG-based filtering parameters====
-            use_cog_filter=True,
+            use_cog_filter=False,
             cog_axis_projection_th=0.5,
             # ====Reachable grasp filtering parameters====
-            use_reachable_grasp_filter=False,
-            base_x_axis=np.array([0.0, 1.0, 0.0]), # y axis of the world, which is the frontal direction of the robot
+            use_reachable_grasp_filter=True,
+            world_y_axis=np.array([-1.0, 0.0, 0.0]), # which is the frontal direction of the robot
             grasp_axis_projection_th=0.0,
         )
         self.get_logger().info(f"Inference time: {time.time() - t:.3f}s")
@@ -721,6 +721,7 @@ class InferenceTest2(AIRNode):
                 f"Model inference returned invalid pose matrix shape {prediction.shape}, expected (4, 4)."
             )
 
+    
         grasp_quat = np.asarray(quaternion_from_matrix(prediction), dtype=float)
         grasp_translation = np.asarray(translation_from_matrix(prediction), dtype=float)
         grasp_translation[0] += grasp_x_offset

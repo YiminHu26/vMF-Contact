@@ -175,7 +175,7 @@ class vmfContactModule():
         cog_axis=None,
         cog_axis_projection_th=0.7,
         use_reachable_grasp_filter=False,
-        base_x_axis=None,
+        world_y_axis=None,
         grasp_axis_projection_th=0.0,
     ):
         """
@@ -184,20 +184,30 @@ class vmfContactModule():
         if not hasattr(self, "model_"):
             raise RuntimeError("Estimator model is not loaded. Call module_loader()/fit() first.")
 
+        # use_cog_filter=True, use_reachable_grasp_filter=True,
+        # -> error
         if use_cog_filter and use_reachable_grasp_filter:
             raise ValueError("use_cog_filter and use_reachable_grasp_filter cannot both be True")
 
+        # use_cog_filter=False, use_reachable_grasp_filter=False,
+        # -> no filter
         if not use_cog_filter and not use_reachable_grasp_filter:
             grasp_cog_max_dist_th = None
             grasp_cog_min_dist_th = None
             cog = None
             cog_axis = None
             cog_axis_projection_th = None
-            base_x_axis = None
+            world_y_axis = None
             grasp_axis_projection_th = None
-        elif use_cog_filter:
-            base_x_axis = None
+
+        # use_cog_filter=True, use_reachable_grasp_filter=False,
+        # -> use cog filter
+        elif use_cog_filter and not use_reachable_grasp_filter:
+            world_y_axis = None
             grasp_axis_projection_th = None
+        
+        # use_cog_filter=False, use_reachable_grasp_filter=True,
+        # -> use reachable grasp filter
         else:
             cog_axis_projection_th = None
 
@@ -222,7 +232,7 @@ class vmfContactModule():
             cog_axis=cog_axis,
             cog_axis_projection_th=cog_axis_projection_th,
             use_reachable_grasp_filter=use_reachable_grasp_filter,
-            base_x_axis=base_x_axis,
+            world_y_axis=world_y_axis,
             grasp_axis_projection_th=grasp_axis_projection_th,
         )
 

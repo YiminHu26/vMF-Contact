@@ -516,7 +516,7 @@ class vmfContactLightningModule(pl.LightningModule):
         cog_axis_projection_th = 0.7,
         # Reachable grasp filtering parameters
         use_reachable_grasp_filter=False,
-        base_x_axis=None,
+        world_y_axis=None,
         grasp_axis_projection_th=0.0,
         ):
         if len(pcd) == 0:
@@ -532,10 +532,10 @@ class vmfContactLightningModule(pl.LightningModule):
             cog = None
             cog_axis = None
             cog_axis_projection_th = None
-            base_x_axis = None
+            world_y_axis = None
             grasp_axis_projection_th = None
-        elif use_cog_filter:
-            base_x_axis = None
+        elif use_cog_filter and not use_reachable_grasp_filter:
+            world_y_axis = None
             grasp_axis_projection_th = None
         else:
             cog_axis_projection_th = None
@@ -546,7 +546,7 @@ class vmfContactLightningModule(pl.LightningModule):
             pcd = pcd.view(-1, 3)
 
         # Subsample the point cloud to pcd_num points
-        # default: 20000 (pcd 1080x720 -> 100000 after compute_pcd_base() -> 20000)
+        # default: 20000 (pcd 1280x720 -> 100000 after compute_pcd_base() -> 20000)
         pcd = over_or_re_sample(pcd, pcd_num)
 
         with torch.no_grad():
@@ -569,7 +569,7 @@ class vmfContactLightningModule(pl.LightningModule):
                                                     cog = cog,
                                                     cog_axis=cog_axis,
                                                     cog_axis_projection_th=cog_axis_projection_th,
-                                                    base_x_axis=base_x_axis,
+                                                    world_y_axis=world_y_axis,
                                                     grasp_axis_projection_th=grasp_axis_projection_th,
                                                     )
         
