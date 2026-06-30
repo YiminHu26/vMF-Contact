@@ -314,7 +314,7 @@ from ros2_nodes.utils_node import *
 class InferenceTest2(AIRNode):
     """
     ROS2 node that waits for depth + camera info, computes a base_link point cloud,
-    runs inference once, publishes the pose, then shuts down.
+    runs inference on demand, and publishes the pose.
     """
 
     def __init__(
@@ -327,15 +327,99 @@ class InferenceTest2(AIRNode):
         self.args = args
         self.model = model
         self.output_name = output_name
+        self.last_depth_msg = None
+        self.camera_matrix = None
+        self.image_width = None
+        self.image_height = None
         self.grasp_pose_publisher = self.create_publisher(PoseStamped, "/arm_vmf/pose_chosen", 10)
         # self.place_pose_publisher = self.create_publisher(PoseStamped, "/arm_vmf/place_pose", 10)
         self.inference_done = False
+        self.inference_count = 0
+        self.output_name_base = output_name or time.strftime("vmf_%Y%m%d_%H%M%S")
+        self.current_output_name = self.output_name_base
         self._tf_wait_logged = False
         self.get_logger().info("Waiting for depth + camera info...")
-        self.timer = self.create_timer(0.1, self._tick)
+        self.timer = None
+
+    def start_inference_timer(self) -> None:
+        if self.timer is None:
+            self.timer = self.create_timer(0.1, self._tick)
+
+    def wait_for_initial_inputs(self, timeout_sec: Optional[float] = 2.0) -> bool:
+        deadline = None if timeout_sec is None else time.monotonic() + timeout_sec
+        while (
+            rclpy.ok()
+            and not self._inputs_ready()
+            and (deadline is None or time.monotonic() < deadline)
+        ):
+            rclpy.spin_once(self, timeout_sec=0.1)
+
+        if not self._inputs_ready():
+            if timeout_sec is None:
+                self.get_logger().warning("Stopped before depth/camera info was ready.")
+            else:
+                self.get_logger().warning(
+                    f"No depth/camera info after {timeout_sec:.1f}s fallback wait; "
+                    "continuing to wait in timer."
+                )
+            return False
+
+        self.get_logger().info("Depth + camera info received.")
+        return True
+
+    def _prepare_next_inference(self) -> None:
+        self.inference_count += 1
+        self.current_output_name = f"{self.output_name_base}_{self.inference_count:03d}"
+        self.inference_done = False
+        self.last_depth_msg = None
+        self.get_logger().info(
+            f"Starting inference cycle {self.inference_count}; output prefix: "
+            f"{self.current_output_name}"
+        )
+        self.get_logger().info("Waiting for a fresh depth frame...")
+
+    def _wait_for_tf(self) -> bool:
+        while rclpy.ok() and not self._tf_ready():
+            rclpy.spin_once(self, timeout_sec=0.1)
+        return rclpy.ok()
+
+    def run_inference_cycle(self) -> None:
+        if not self.wait_for_initial_inputs(timeout_sec=None):
+            return
+        if not self._wait_for_tf():
+            return
+
+        pcd_from_saver = self.compute_pcd_base(target_points=100000)
+        self.run_inference_once(pcd_from_saver)
+        self.inference_done = True
+
+    def run_interactive_loop(self) -> None:
+        while rclpy.ok():
+            try:
+                input(
+                    f"\n[{self.inference_count + 1}] Press Enter to receive a "
+                    "point cloud and run inference (Ctrl+C to exit)..."
+                )
+            except EOFError:
+                self.get_logger().warning("stdin closed; stopping inference loop.")
+                break
+
+            self._prepare_next_inference()
+            try:
+                self.run_inference_cycle()
+            except Exception as exc:
+                self.get_logger().error(f"Inference failed: {exc}")
+            finally:
+                self.inference_done = True
+                self.get_logger().info(
+                    "Inference cycle complete. Press Enter for the next cycle."
+                )
 
     def _inputs_ready(self) -> bool:
-        return self.last_depth_msg is not None and self.camera_matrix is not None
+        return (
+            getattr(self, "last_depth_msg", None) is not None
+            and getattr(self, "camera_matrix", None) is not None
+        )
 
     def _tf_ready(self) -> bool:
         try:
@@ -365,7 +449,7 @@ class InferenceTest2(AIRNode):
             self.get_logger().info("Inference already done, skipping.")
             return
         if not self._inputs_ready():
-            self.get_logger().warning("Inputs not ready.")
+            self.get_logger().warning("Inputs not ready; waiting for depth + camera info.")
             return
         if not self._tf_ready():
             self.get_logger().warning("TF not ready.")
@@ -378,8 +462,7 @@ class InferenceTest2(AIRNode):
             self.get_logger().error(f"Inference failed: {exc}")
         finally:
             self.inference_done = True
-            self.get_logger().info("Inference complete. Shutting down.")
-            rclpy.shutdown()
+            self.get_logger().info("Inference complete.")
 
     def compute_pcd_base(self, target_points: int = 40000) -> np.ndarray:
         if self.last_depth_msg is None or self.camera_matrix is None:
@@ -588,9 +671,9 @@ class InferenceTest2(AIRNode):
 
         default_save_dir = os.path.dirname(os.path.abspath(__file__))
         os.makedirs(os.path.join(default_save_dir, "logs"), exist_ok=True)
-        
-        grasp_pose_ply_path = os.path.join(default_save_dir, "logs", f"{self.output_name}_grasp.ply")
-        pcd_no_pose_ply_path = os.path.join(default_save_dir, "logs", f"{self.output_name}_no_pose.ply")
+        output_name = self.current_output_name or self.output_name_base
+        grasp_pose_ply_path = os.path.join(default_save_dir, "logs", f"{output_name}_grasp.ply")
+        pcd_no_pose_ply_path = os.path.join(default_save_dir, "logs", f"{output_name}_no_pose.ply")
         
         # The point cloud pcd_from_saver is already in base_link frame and has shape (N, 3)
         pcd = torch.from_numpy(pcd_from_saver).float()
@@ -682,7 +765,7 @@ class InferenceTest2(AIRNode):
             fused_pose=False,
             interactive_vis=True,
             grasp_cog_max_dist_th=0.025,
-            grasp_cog_min_dist_th=0.0,
+            grasp_cog_min_dist_th=None,
             cog=cog_mean,
             cog_axis=obb_rot,
             # ====CoG-based filtering parameters====
@@ -692,6 +775,7 @@ class InferenceTest2(AIRNode):
             use_reachable_grasp_filter=True,
             world_y_axis=np.array([-1.0, 0.0, 0.0]), # which is the frontal direction of the robot
             grasp_axis_projection_th=0.0,
+            grasp_z_negative_world_z_angle_th=np.deg2rad(10.0),
         )
         self.get_logger().info(f"Inference time: {time.time() - t:.3f}s")
 
@@ -754,7 +838,7 @@ class InferenceTest2(AIRNode):
             "grasp_y_offset": grasp_y_offset,
             "grasp_z_offset": grasp_z_offset,
         }
-        with open(os.path.join(default_save_dir, "logs", f"{self.output_name}_meta.json"), "w") as f:
+        with open(os.path.join(default_save_dir, "logs", f"{output_name}_meta.json"), "w") as f:
             json.dump(metadata, f, indent=2)
 
         self._visualize_pose_and_pcd(pcd_np, 
@@ -851,7 +935,7 @@ def main(args=None):
 
     output_name = input(
         'Enter a name for the visualization: \n'
-        'Name convention is "<input>_grasp.ply" or "<input>_no_pose.ply" \n '
+        'Name convention is "<input>_001_grasp.ply" or "<input>_001_no_pose.ply" \n '
     ).strip()
     if not output_name:
         output_name = time.strftime("vmf_%Y%m%d_%H%M%S")
@@ -893,12 +977,13 @@ def main(args=None):
                           model,                          
                           output_name=output_name)
     try:
-        rclpy.spin(node)
+        node.run_interactive_loop()
     except KeyboardInterrupt:
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 if __name__ == "__main__":
     main()

@@ -23,6 +23,7 @@ normal_o3d_vis = True
 pcd_from_prompt_matching_th = 0.002
 dist_th_pcd=0.01
 dist_th_baseline = 0.86
+cp_negative_baseline_margin = 0.02
 
 class GraspBuffer:
     def __init__(self, device="cuda:0"):
@@ -93,7 +94,7 @@ class GraspBuffer:
             baseline, approach, cp, grasp_width, kappa, graspness = self.get_grasp_fused()
         else:
             baseline, approach, cp, grasp_width, kappa, graspness = self.get_grasp_curr()
-        cp2 = cp + grasp_width * baseline
+        cp, cp2 = self.contact_pair_with_margin(cp, baseline, grasp_width)
 
         if amplify_kappa:
             kappa *= 80   
@@ -154,6 +155,8 @@ class GraspBuffer:
                     cog=None,
                     world_y_axis=None,
                     grasp_axis_projection_th=0.0,
+                    convention="xzy",
+                    grasp_z_negative_world_z_angle_th=None,
                     ):
         predictions = {}
         predictions["contact_point"] = out["contact_point"].squeeze(0)
@@ -207,6 +210,8 @@ class GraspBuffer:
                                 cog = cog,
                                 world_y_axis = world_y_axis,
                                 grasp_axis_projection_th = grasp_axis_projection_th,
+                                convention = convention,
+                                grasp_z_negative_world_z_angle_th = grasp_z_negative_world_z_angle_th,
                                 )
         return valid_grasp
 
@@ -228,6 +233,8 @@ class GraspBuffer:
                cog=None,
                world_y_axis=None,
                grasp_axis_projection_th=0.0,
+               convention="xzy",
+               grasp_z_negative_world_z_angle_th=None,
                ):     
         
         if not isinstance(pcd_shift, torch.Tensor):
@@ -283,7 +290,12 @@ class GraspBuffer:
 
         if world_y_axis is not None:
             filter = filter & self.filter_grasps_by_reachable(
-                baseline, approach, world_y_axis, grasp_axis_projection_th
+                baseline,
+                approach,
+                world_y_axis,
+                grasp_axis_projection_th,
+                convention=convention,
+                grasp_z_negative_world_z_angle_th=grasp_z_negative_world_z_angle_th,
             )
 
         if filter.sum() == 0:
@@ -480,13 +492,24 @@ class GraspBuffer:
         graspness = torch.cat(self.buffer_dict["graspness"], dim=0)
         return baselines, approaches, cp, grasp_width, kappa, graspness
     
+    def apply_cp_margin(self, cp, baseline, margin=cp_negative_baseline_margin):
+        return cp - margin * baseline
+
+    def contact_pair_with_margin(self, cp, baseline, grasp_width):
+        cp_margin = self.apply_cp_margin(cp, baseline)
+        cp2 = cp_margin + grasp_width * baseline
+        return cp_margin, cp2
+
+    def contacts_to_poses(self, baseline, approach, cp, grasp_width, convention="xzy"):
+        cp, cp2 = self.contact_pair_with_margin(cp, baseline, grasp_width)
+        return rotation_from_contact(baseline=baseline,
+                                     approach=approach,
+                                     translation=(cp + cp2) / 2,
+                                     convention=convention)
+
     def get_pose_all(self, convention="xzy"):
         baselines, approaches, cp, grasp_width, kappa, graspness = self.get_grasp_all()
-        cp2 = cp + grasp_width * baselines
-        poses = rotation_from_contact(baseline=baselines, 
-                                      approach=approaches, 
-                                      translation=(cp+cp2)/2, 
-                                      convention=convention)
+        poses = self.contacts_to_poses(baselines, approaches, cp, grasp_width, convention)
         return poses, kappa, graspness
     
     def get_grasp_curr(self, pcd_from_prompt=None, cog_axis=None, cog_axis_projection_th=0.7):
@@ -523,11 +546,7 @@ class GraspBuffer:
             cog_axis,
             cog_axis_projection_th,
         )
-        cp2 = cp + grasp_width * baseline
-        poses = rotation_from_contact(baseline=baseline, 
-                                      approach=approach, 
-                                      translation=(cp+cp2)/2,
-                                      convention=convention)
+        poses = self.contacts_to_poses(baseline, approach, cp, grasp_width, convention)
         return poses, kappa, graspness
     
     def get_pose_curr_best(self, 
@@ -580,11 +599,7 @@ class GraspBuffer:
             cog_axis,
             cog_axis_projection_th,
         )
-        cp2 = cp + grasp_width * baseline
-        poses = rotation_from_contact(baseline=baseline, 
-                                      approach=approach, 
-                                      translation=(cp+cp2)/2,
-                                      convention=convention)
+        poses = self.contacts_to_poses(baseline, approach, cp, grasp_width, convention)
         if len(poses) == 0:
             vis_list = []
             if pcd_from_prompt is not None:
@@ -734,11 +749,21 @@ class GraspBuffer:
         projection = torch.sum(grasp_y_axis * cog_axis, dim=-1)
         return projection > cog_axis_projection_th
 
-    def filter_grasps_by_reachable(self, baseline, approach, world_y_axis, grasp_axis_projection_th=0.0):
+    def filter_grasps_by_reachable(
+        self,
+        baseline,
+        approach,
+        world_y_axis,
+        grasp_axis_projection_th=0.0,
+        convention="xzy",
+        grasp_z_negative_world_z_angle_th=None,
+    ):
         '''
         Filter grasps by reachability: keep only grasps where the included angle between
         the physical grasp y-axis (cross product of baseline and approach) and the y-axis of the
         world frame is between -pi/2 and pi/2 (i.e., dot product > grasp_axis_projection_th).
+        Optionally keep only poses whose pose z-axis is parallel to, or within
+        grasp_z_negative_world_z_angle_th radians of, the negative world z-axis.
         '''
         if not isinstance(world_y_axis, torch.Tensor):
             world_y_axis = torch.tensor(world_y_axis, device=baseline.device, dtype=baseline.dtype)
@@ -748,4 +773,29 @@ class GraspBuffer:
 
         grasp_y_axis = torch.nn.functional.normalize(torch.linalg.cross(approach, baseline), dim=-1)
         projection = torch.sum(grasp_y_axis * world_y_axis, dim=-1)
-        return projection > grasp_axis_projection_th
+        reachable_filter = projection > grasp_axis_projection_th
+
+        if grasp_z_negative_world_z_angle_th is None:
+            return reachable_filter
+
+        if convention == "xzy":
+            grasp_z_axis = torch.nn.functional.normalize(approach, dim=-1)
+        elif convention == "zyx":
+            grasp_z_axis = torch.nn.functional.normalize(torch.linalg.cross(baseline, approach), dim=-1)
+        else:
+            raise ValueError(f"Unsupported convention {convention!r}")
+
+        negative_world_z_axis = torch.tensor([0.0, 0.0, -1.0], device=baseline.device, dtype=baseline.dtype)
+        max_projection = torch.cos(torch.as_tensor(
+            grasp_z_negative_world_z_angle_th,
+            device=baseline.device,
+            dtype=baseline.dtype,
+        ))
+        z_axis_is_downward = torch.sum(grasp_z_axis * negative_world_z_axis, dim=-1) >= max_projection
+        kept_count = (reachable_filter & z_axis_is_downward).sum().item()
+        print(
+            "Reachable z-angle filter kept "
+            f"{kept_count}/{reachable_filter.sum().item()} grasps "
+            f"within {torch.rad2deg(torch.as_tensor(grasp_z_negative_world_z_angle_th)).item():.1f} deg of -world z"
+        )
+        return reachable_filter & z_axis_is_downward

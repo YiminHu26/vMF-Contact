@@ -177,6 +177,7 @@ class vmfContactModule():
         use_reachable_grasp_filter=False,
         world_y_axis=None,
         grasp_axis_projection_th=0.0,
+        grasp_z_negative_world_z_angle_th=None,
     ):
         """
         Runs grasp inference through the loaded Lightning module.
@@ -199,12 +200,14 @@ class vmfContactModule():
             cog_axis_projection_th = None
             world_y_axis = None
             grasp_axis_projection_th = None
+            grasp_z_negative_world_z_angle_th = None
 
         # use_cog_filter=True, use_reachable_grasp_filter=False,
         # -> use cog filter
         elif use_cog_filter and not use_reachable_grasp_filter:
             world_y_axis = None
             grasp_axis_projection_th = None
+            grasp_z_negative_world_z_angle_th = None
         
         # use_cog_filter=False, use_reachable_grasp_filter=True,
         # -> use reachable grasp filter
@@ -234,6 +237,7 @@ class vmfContactModule():
             use_reachable_grasp_filter=use_reachable_grasp_filter,
             world_y_axis=world_y_axis,
             grasp_axis_projection_th=grasp_axis_projection_th,
+            grasp_z_negative_world_z_angle_th=grasp_z_negative_world_z_angle_th,
         )
 
     # ---------------------------------------------------------------------------------------------

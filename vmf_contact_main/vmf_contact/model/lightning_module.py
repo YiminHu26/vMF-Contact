@@ -518,6 +518,7 @@ class vmfContactLightningModule(pl.LightningModule):
         use_reachable_grasp_filter=False,
         world_y_axis=None,
         grasp_axis_projection_th=0.0,
+        grasp_z_negative_world_z_angle_th=None,
         ):
         if len(pcd) == 0:
             # print("No valid point cloud, skipping inference")
@@ -534,9 +535,11 @@ class vmfContactLightningModule(pl.LightningModule):
             cog_axis_projection_th = None
             world_y_axis = None
             grasp_axis_projection_th = None
+            grasp_z_negative_world_z_angle_th = None
         elif use_cog_filter and not use_reachable_grasp_filter:
             world_y_axis = None
             grasp_axis_projection_th = None
+            grasp_z_negative_world_z_angle_th = None
         else:
             cog_axis_projection_th = None
         
@@ -571,6 +574,8 @@ class vmfContactLightningModule(pl.LightningModule):
                                                     cog_axis_projection_th=cog_axis_projection_th,
                                                     world_y_axis=world_y_axis,
                                                     grasp_axis_projection_th=grasp_axis_projection_th,
+                                                    convention=convention,
+                                                    grasp_z_negative_world_z_angle_th=grasp_z_negative_world_z_angle_th,
                                                     )
         
 
